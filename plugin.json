@@ -1,0 +1,11 @@
+{
+    "id": "io.github.logsquirl.serial",
+    "name": "Serial Monitor",
+    "version": "0.1.0",
+    "type": "ui",
+    "library": "logsquirl_serial",
+    "api_version": 1,
+    "description": "Stream serial port data into LogSquirl tabs",
+    "author": "LogSquirl Contributors",
+    "license": "GPL-3.0-or-later"
+}
