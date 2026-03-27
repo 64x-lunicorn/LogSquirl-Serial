@@ -168,7 +168,17 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          QT_LIB="${Qt6_DIR}/../../lib"
+          # install-qt-action does not always export Qt6_DIR as a shell
+          # env-var.  Extract the Qt6 lib dir from the CMake cache instead
+          # (guaranteed to exist after a successful configure step).
+          QT6_CMAKE_DIR=$(grep '^Qt6_DIR:' build/CMakeCache.txt | cut -d= -f2)
+          QT_LIB="${QT6_CMAKE_DIR}/../../lib"
+
+          if [ ! -d "$QT_LIB" ]; then
+            echo "::error::Qt lib dir not found at $QT_LIB (Qt6_DIR=$QT6_CMAKE_DIR)"
+            exit 1
+          fi
+
           MODULE="QtSerialPort"
 
           # Qt6 framework layout varies: versioned (Versions/A/<lib>) or
