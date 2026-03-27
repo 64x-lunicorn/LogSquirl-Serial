@@ -49,6 +49,7 @@ target_sources(logsquirl_serial_tests
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/serialprocess.cpp"
         "${CMAKE_SOURCE_DIR}/src/portwidget.cpp"
+        "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
 )
 
 add_test(NAME logsquirl_serial_tests COMMAND logsquirl_serial_tests)

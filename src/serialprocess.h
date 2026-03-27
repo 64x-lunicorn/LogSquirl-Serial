@@ -146,6 +146,16 @@ class SerialProcess : public QObject {
      */
     void preserveTempFile();
 
+    /**
+     * Rotate the log file: close the current temp file and open a new
+     * one in the same temp directory.  The old file is preserved so the
+     * existing LogSquirl tab keeps its content.  New serial output is
+     * redirected to the new file.
+     *
+     * @return Absolute path to the new temp file, or empty on failure.
+     */
+    QString rotateLog();
+
     /** Whether the serial port is currently open. */
     bool isRunning() const;
 
@@ -190,6 +200,7 @@ class SerialProcess : public QObject {
     QFile saveFile_;
     QByteArray readBuffer_;  ///< Accumulates partial lines from the port.
     qint64 lineCount_ = 0;
+    int rotationCount_ = 0;  ///< Incremented on each rotateLog() call.
 };
 
 } // namespace serial_monitor

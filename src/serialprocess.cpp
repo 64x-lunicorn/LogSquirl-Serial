@@ -227,6 +227,51 @@ void SerialProcess::preserveTempFile()
     tempDir_.setAutoRemove( false );
 }
 
+QString SerialProcess::rotateLog()
+{
+    if ( !isRunning() ) {
+        return {};
+    }
+
+    // Flush any pending partial line to the old file before rotating
+    if ( !readBuffer_.isEmpty() ) {
+        if ( config_.timestamps ) {
+            const auto ts
+                = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
+            tempFile_.write( "[" + ts.toUtf8() + "] " );
+        }
+        tempFile_.write( readBuffer_ );
+        tempFile_.write( "\n", 1 );
+        tempFile_.flush();
+        ++lineCount_;
+        readBuffer_.clear();
+    }
+
+    // Close the old temp file (it stays on disk for the old tab)
+    tempFile_.close();
+
+    ++rotationCount_;
+    lineCount_ = 0;
+
+    // Open a new temp file in the same directory with an incremented suffix
+    const auto newPath = tempDir_.path() + "/serial_" + config_.portName + "_"
+                         + QString::number( rotationCount_ ) + ".log";
+    tempFile_.setFileName( newPath );
+    if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+        hostLog( LOGSQUIRL_LOG_ERROR,
+                 qPrintable( "Failed to open rotated temp file: "
+                             + tempFile_.errorString() ) );
+        return {};
+    }
+
+    hostLog( LOGSQUIRL_LOG_INFO,
+             qPrintable( QString( "Rotated serial log for %1 (rotation #%2)" )
+                             .arg( config_.portName )
+                             .arg( rotationCount_ ) ) );
+
+    return newPath;
+}
+
 bool SerialProcess::isRunning() const
 {
     return port_.isOpen();
