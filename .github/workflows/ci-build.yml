@@ -170,13 +170,30 @@ jobs:
         run: |
           QT_LIB="${Qt6_DIR}/../../lib"
           MODULE="QtSerialPort"
-          FW_SRC="$QT_LIB/$MODULE.framework/Versions/A/$MODULE"
 
-          if [ ! -f "$FW_SRC" ]; then
-            echo "::error::$FW_SRC not found — is qtserialport module installed?"
+          # Qt6 framework layout varies: versioned (Versions/A/<lib>) or
+          # flat (<framework>/<lib>).  Try both.
+          FW_SRC=""
+          for candidate in \
+            "$QT_LIB/$MODULE.framework/Versions/A/$MODULE" \
+            "$QT_LIB/$MODULE.framework/Versions/Current/$MODULE" \
+            "$QT_LIB/$MODULE.framework/$MODULE"; do
+            if [ -f "$candidate" ]; then
+              FW_SRC="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$FW_SRC" ]; then
+            echo "::error::QtSerialPort framework not found in $QT_LIB"
+            echo "Directory listing:"
+            find "$QT_LIB" -name "*SerialPort*" 2>/dev/null || true
             exit 1
           fi
 
+          echo "Found framework binary: $FW_SRC"
+
+          # Always create the versioned layout so rpaths work consistently
           mkdir -p "staging/$MODULE.framework/Versions/A"
           cp "$FW_SRC" "staging/$MODULE.framework/Versions/A/"
 
