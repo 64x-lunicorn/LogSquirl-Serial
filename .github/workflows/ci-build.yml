@@ -171,11 +171,18 @@ jobs:
           # install-qt-action does not always export Qt6_DIR as a shell
           # env-var.  Extract the Qt6 lib dir from the CMake cache instead
           # (guaranteed to exist after a successful configure step).
+          # Qt6_DIR points to .../lib/cmake/Qt6 — go up 3 levels to the
+          # Qt prefix, then back into lib/.
           QT6_CMAKE_DIR=$(grep '^Qt6_DIR:' build/CMakeCache.txt | cut -d= -f2)
-          QT_LIB="${QT6_CMAKE_DIR}/../../lib"
+          QT_PREFIX=$(cd "$QT6_CMAKE_DIR/../../.." && pwd)
+          QT_LIB="$QT_PREFIX/lib"
+
+          echo "Qt6_DIR  = $QT6_CMAKE_DIR"
+          echo "QT_PREFIX = $QT_PREFIX"
+          echo "QT_LIB   = $QT_LIB"
 
           if [ ! -d "$QT_LIB" ]; then
-            echo "::error::Qt lib dir not found at $QT_LIB (Qt6_DIR=$QT6_CMAKE_DIR)"
+            echo "::error::Qt lib dir not found at $QT_LIB"
             exit 1
           fi
 
