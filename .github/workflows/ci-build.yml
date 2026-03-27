@@ -151,22 +151,62 @@ jobs:
           fi
           echo "CODESIGN_ID=$CODESIGN_ID" >> "$GITHUB_ENV"
 
-      - name: Sign plugin dylib
-        if: runner.os == 'macOS' && github.event_name == 'workflow_call' && env.CODESIGN_ID != ''
-        shell: bash
-        run: |
-          codesign --force --options runtime --timestamp \
-            --sign "$CODESIGN_ID" \
-            "build/${{ matrix.lib-name }}"
-          echo "=== Verify signature ==="
-          codesign --verify --strict --verbose=2 "build/${{ matrix.lib-name }}"
-
       - name: Prepare artifact
         shell: bash
         run: |
           mkdir -p staging
           cp build/${{ matrix.lib-name }} staging/
           cp plugin.json staging/
+
+      # ── macOS: bundle QtSerialPort.framework alongside the plugin ───────
+      # The host app does not ship QtSerialPort — the plugin must carry it.
+      # We copy only the bare binary into a minimal framework directory
+      # structure (no symlinks) so it survives ZIP archiving.  The dylib's
+      # @loader_path rpath resolves it at runtime; QtCore/QtWidgets are
+      # already loaded by the host process and reused via install-name match.
+      - name: Bundle QtSerialPort framework
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          QT_LIB="${Qt6_DIR}/../../lib"
+          MODULE="QtSerialPort"
+          FW_SRC="$QT_LIB/$MODULE.framework/Versions/A/$MODULE"
+
+          if [ ! -f "$FW_SRC" ]; then
+            echo "::error::$FW_SRC not found — is qtserialport module installed?"
+            exit 1
+          fi
+
+          mkdir -p "staging/$MODULE.framework/Versions/A"
+          cp "$FW_SRC" "staging/$MODULE.framework/Versions/A/"
+
+          # Strip CI-specific rpaths from the framework binary
+          for rp in $(otool -l "staging/$MODULE.framework/Versions/A/$MODULE" \
+                      | awk '/cmd LC_RPATH/{found=1} found && /path /{print $2; found=0}'); do
+            install_name_tool -delete_rpath "$rp" \
+              "staging/$MODULE.framework/Versions/A/$MODULE" 2>/dev/null || true
+          done
+
+          echo "=== Bundled $MODULE ==="
+          ls -la "staging/$MODULE.framework/Versions/A/"
+
+      - name: Sign plugin artifacts
+        if: runner.os == 'macOS' && github.event_name == 'workflow_call' && env.CODESIGN_ID != ''
+        shell: bash
+        run: |
+          # Sign framework binary first (inside-out)
+          if [ -d staging/QtSerialPort.framework ]; then
+            codesign --force --options runtime --timestamp \
+              --sign "$CODESIGN_ID" \
+              staging/QtSerialPort.framework/Versions/A/QtSerialPort
+          fi
+
+          # Sign the plugin dylib
+          codesign --force --options runtime --timestamp \
+            --sign "$CODESIGN_ID" \
+            "staging/${{ matrix.lib-name }}"
+          echo "=== Verify signatures ==="
+          codesign --verify --strict --verbose=2 "staging/${{ matrix.lib-name }}"
 
       - name: Notarize plugin
         if: runner.os == 'macOS' && github.event_name == 'workflow_call' && env.CODESIGN_ID != ''
