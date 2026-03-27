@@ -69,6 +69,15 @@ target_link_libraries(logsquirl_serial
         Qt6::SerialPort
 )
 
+# ── macOS rpath ───────────────────────────────────────────────────────────
+# When loaded from Contents/PlugIns/<id>/, the plugin resolves Qt frameworks
+# via @loader_path/../../../Frameworks (→ Contents/Frameworks/).
+if(APPLE)
+    set_target_properties(logsquirl_serial PROPERTIES
+        INSTALL_RPATH "@loader_path;@loader_path/../../../Frameworks"
+    )
+endif()
+
 # ── Install rule ──────────────────────────────────────────────────────────
 # Copies the library and manifest into a directory that can be placed
 # inside any of LogSquirl's plugin search paths.
