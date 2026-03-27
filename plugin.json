@@ -1,7 +1,7 @@
 {
     "id": "io.github.logsquirl.serial",
     "name": "Serial Monitor",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "type": "ui",
     "library": "logsquirl_serial",
     "api_version": 1,

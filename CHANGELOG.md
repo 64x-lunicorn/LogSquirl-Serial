@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-03-27
+
+### Added
+- **Plugin registry** — README now links to the
+  [LogSquirl-Plugins](https://github.com/64x-lunicorn/LogSquirl-Plugins) registry
+  with Mermaid diagram showing the install flow.
+
+### Fixed
+- **macOS CI**: Bundle `QtSerialPort.framework` alongside the plugin in the
+  release ZIP so the host app does not need to ship it.
+- **macOS CI**: Strip CI-specific rpaths and add portable `@loader_path` entries
+  so the plugin resolves frameworks from the host app bundle.
+- **macOS CI**: Handle flat Qt6 framework layout (`QtSerialPort.framework/QtSerialPort`)
+  used by newer aqtinstall versions.
+- **macOS CI**: Extract Qt6 lib path from CMake cache instead of relying on the
+  `Qt6_DIR` shell environment variable which is not always exported.
+
 ## [0.2.0] — 2026-03-26
 
 ### Added
@@ -43,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI build workflow for Linux, macOS, and Windows.
 - CI release workflow with per-platform ZIP artifacts and checksums.
 
-[Unreleased]: https://github.com/64x-lunicorn/LogSquirl-Serial/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/64x-lunicorn/LogSquirl-Serial/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/64x-lunicorn/LogSquirl-Serial/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/64x-lunicorn/LogSquirl-Serial/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/64x-lunicorn/LogSquirl-Serial/releases/tag/v0.1.0
