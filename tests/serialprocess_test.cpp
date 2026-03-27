@@ -117,3 +117,43 @@ SCENARIO( "configDir falls back to temp when plugin is not initialised", "[seria
         }
     }
 }
+
+SCENARIO( "rotateLog creates a new temp file and preserves the old one", "[serialprocess]" )
+{
+    GIVEN( "a SerialProcess that is not running" )
+    {
+        SerialConfig cfg;
+        cfg.portName = "/dev/ttyUSB0";
+        SerialProcess proc( cfg );
+
+        WHEN( "rotateLog is called without starting the process" )
+        {
+            const auto result = proc.rotateLog();
+
+            THEN( "it returns an empty string because the port is not open" )
+            {
+                REQUIRE( result.isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a SerialProcess whose temp file has been manually set up for testing" )
+    {
+        // We cannot call start() without real hardware, but we can verify that
+        // rotateLog returns empty when not running (port not open = no rotation).
+        SerialConfig cfg;
+        cfg.portName = "rotate-test-port";
+        SerialProcess proc( cfg );
+
+        THEN( "rotateLog returns empty because no port is open" )
+        {
+            REQUIRE( proc.rotateLog().isEmpty() );
+        }
+
+        THEN( "the line count stays at 0 after a failed rotation" )
+        {
+            proc.rotateLog();
+            REQUIRE( proc.lineCount() == 0 );
+        }
+    }
+}

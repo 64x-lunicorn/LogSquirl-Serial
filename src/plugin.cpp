@@ -44,6 +44,7 @@
 #include "plugin.h"
 
 #include "portwidget.h"
+#include "sidebarwidget.h"
 #include "serialprocess.h"
 
 #include <QInputDialog>
@@ -135,6 +136,16 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026",
                                &showSerialDialog, nullptr );
 
+    // Create the PortWidget early so the sidebar panel can reference it.
+    serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
+
+    // Register a sidebar tab for serial session management
+    serial_monitor::g_state.sidebarWidget
+        = new serial_monitor::SidebarWidget( serial_monitor::g_state.dialog );
+    api->register_sidebar_tab(
+        handle, "Serial",
+        static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
+
     api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin ready." );
     return 0;
 }
@@ -148,6 +159,14 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 {
     serial_monitor::hostLog( LOGSQUIRL_LOG_INFO, "Serial Monitor plugin shutting down\u2026" );
+
+    if ( serial_monitor::g_state.sidebarWidget ) {
+        serial_monitor::g_state.api->unregister_sidebar_tab(
+            serial_monitor::g_state.handle,
+            static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
+        delete serial_monitor::g_state.sidebarWidget;
+        serial_monitor::g_state.sidebarWidget = nullptr;
+    }
 
     if ( serial_monitor::g_state.dialog ) {
         serial_monitor::g_state.dialog->stopAll();

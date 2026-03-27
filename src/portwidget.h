@@ -78,6 +78,46 @@ class PortWidget : public QDialog {
     /** Number of currently running sessions. */
     int activeSessionCount() const;
 
+    /** Return the port names of all currently active sessions. */
+    QStringList activePorts() const;
+
+    /**
+     * Rotate the log for an active session: the old temp file is preserved
+     * (tab stays open), a new temp file is created, and a new tab opens.
+     *
+     * @param portName  Port name of the session to rotate.
+     */
+    void rotateSession( const QString& portName );
+
+    /**
+     * Start capture for a specific port.
+     *
+     * @param config    Serial port configuration.
+     * @param savePath  Optional path to a .log file for persistent saving.
+     * @return true if the session started successfully, false otherwise.
+     */
+    bool startSession( const SerialConfig& config, const QString& savePath = {} );
+
+    /**
+     * Stop capture for a specific port.
+     *
+     * @param portName  Port name of the session to stop.
+     */
+    void stopSession( const QString& portName );
+
+    /**
+     * Return the current line count for an active session.
+     *
+     * @param portName  Port name to query.
+     * @return Line count, or 0 if the session is not active.
+     */
+    qint64 sessionLineCount( const QString& portName ) const;
+
+    /**
+     * Check whether a session is currently running for the given port.
+     */
+    bool isSessionActive( const QString& portName ) const;
+
   private Q_SLOTS:
     /** Re-scan for serial ports and update the combo box. */
     void refreshPorts();

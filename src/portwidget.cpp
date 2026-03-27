@@ -228,6 +228,118 @@ int PortWidget::activeSessionCount() const
     return sessions_.size();
 }
 
+QStringList PortWidget::activePorts() const
+{
+    return sessions_.keys();
+}
+
+void PortWidget::rotateSession( const QString& portName )
+{
+    auto* proc = sessions_.value( portName, nullptr );
+    if ( !proc || !proc->isRunning() ) {
+        return;
+    }
+
+    // Prevent old temp dir from being auto-removed so the old tab keeps its data
+    proc->preserveTempFile();
+
+    const auto newPath = proc->rotateLog();
+    if ( newPath.isEmpty() ) {
+        if ( g_state.api && g_state.handle ) {
+            g_state.api->show_notification(
+                g_state.handle,
+                qPrintable( "Failed to rotate log for " + portName ) );
+        }
+        return;
+    }
+
+    // Open the new temp file in a follow-mode tab
+    if ( g_state.api && g_state.handle ) {
+        g_state.api->open_file( g_state.handle, newPath.toUtf8().constData(), 1 );
+        g_state.api->show_notification(
+            g_state.handle,
+            qPrintable( QString( "New session started for %1" ).arg( portName ) ) );
+    }
+}
+
+bool PortWidget::startSession( const SerialConfig& config, const QString& savePath )
+{
+    const auto& name = config.portName;
+    if ( name.isEmpty() || sessions_.contains( name ) ) {
+        return false;
+    }
+
+    auto* proc = new SerialProcess( config, savePath, this );
+
+    connect( proc, &SerialProcess::started, this, [this, name]() {
+        hostLog( LOGSQUIRL_LOG_INFO,
+                 qPrintable( "Serial session started for " + name ) );
+    } );
+
+    connect( proc, &SerialProcess::finished, this, [this, name]() {
+        onSessionFinished( name );
+    } );
+
+    connect( proc, &SerialProcess::errorOccurred, this, [this, name]( const QString& msg ) {
+        onSessionError( name, msg );
+    } );
+
+    proc->start();
+
+    if ( proc->isRunning() || !proc->tempFilePath().isEmpty() ) {
+        sessions_.insert( name, proc );
+
+        if ( g_state.api && g_state.handle ) {
+            const auto path = proc->tempFilePath().toUtf8();
+            g_state.api->open_file( g_state.handle, path.constData(), 1 );
+            g_state.api->show_notification(
+                g_state.handle,
+                qPrintable( QString( "Serial capture started for %1 at %2 baud" )
+                                .arg( name )
+                                .arg( config.baudRate ) ) );
+        }
+
+        refreshPorts();
+        return true;
+    }
+
+    delete proc;
+    return false;
+}
+
+void PortWidget::stopSession( const QString& portName )
+{
+    if ( !sessions_.contains( portName ) ) {
+        return;
+    }
+
+    auto* proc = sessions_.take( portName );
+    proc->stop();
+    proc->preserveTempFile();
+
+    if ( g_state.api && g_state.handle ) {
+        g_state.api->show_notification(
+            g_state.handle,
+            qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
+                            .arg( portName )
+                            .arg( proc->lineCount() ) ) );
+    }
+
+    proc->deleteLater();
+    refreshPorts();
+}
+
+qint64 PortWidget::sessionLineCount( const QString& portName ) const
+{
+    auto* proc = sessions_.value( portName, nullptr );
+    return proc ? proc->lineCount() : 0;
+}
+
+bool PortWidget::isSessionActive( const QString& portName ) const
+{
+    return sessions_.contains( portName );
+}
+
 // ── Private slots ───────────────────────────────────────────────────────
 
 void PortWidget::refreshPorts()

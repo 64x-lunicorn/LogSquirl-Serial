@@ -40,6 +40,7 @@
 
 namespace serial_monitor {
 class PortWidget;
+class SidebarWidget;
 } // namespace serial_monitor
 
 namespace serial_monitor {
@@ -55,6 +56,7 @@ struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     PortWidget* dialog = nullptr;           ///< Serial session dialog.
+    SidebarWidget* sidebarWidget = nullptr;  ///< Sidebar panel for session control.
     bool initialised = false;               ///< True between init() and shutdown().
 };
 

@@ -10,7 +10,8 @@ A [LogSquirl](https://github.com/64x-lunicorn/LogSquirl) plugin that streams
 serial port data from connected devices directly into LogSquirl tabs.
 Supports **multiple parallel ports**, full **serial parameter configuration**
 (baud rate, data bits, stop bits, parity, flow control), optional
-**line timestamps**, and **save-to-file**.
+**line timestamps**, a configurable **log directory** with automatic filenames,
+and a **sidebar panel** for port selection and session control.
 
 This plugin also serves as a **reference implementation / sample plugin** for
 the LogSquirl Plugin SDK.  Every design decision is documented, and the code
@@ -24,7 +25,12 @@ is heavily commented to help you build your own plugins.
 - **Full Serial Config** — Baud rate, data bits, stop bits, parity, and flow
   control — all configurable per session
 - **Timestamps** — Optional `[YYYY-MM-DD HH:mm:ss.zzz]` prefix on each received line
-- **Save to File** — Optionally persist serial output to a `.log` file
+- **Log Directory** — Configurable log save path with automatic filename
+  generation (`YYYY-MM-dd_HHmmss_<portName>.log`); path is persisted across
+  sessions
+- **Sidebar Panel** — Integrated sidebar tab with port dropdown, serial
+  configuration, start/stop, and active session list with rotate and stop
+  buttons
 - **Persistent Logs** — Captured output remains visible in LogSquirl after
   stopping a session
 - **Bluetooth Filtering** — Virtual Bluetooth serial ports are automatically
@@ -104,27 +110,29 @@ After installing, restart LogSquirl (or re-scan via *Plugins → Manage Plugins�
    "Serial Monitor" and click OK.  (On first run, the plugin is
    auto-enabled if no other plugins are configured.)
 
-2. Open the serial monitor dialog via **Plugins → Serial Monitor…**
-
-3. In the dialog:
+2. The **Serial** sidebar tab appears automatically.  Use the sidebar panel
+   to manage sessions:
 
    - **Port dropdown** — Select a connected serial port.
    - **Refresh** — Re-scan for serial ports.
-   - **Settings** — Configure baud rate, data bits, stop bits, parity,
-     and flow control for the session.
-   - **Timestamps** — Check to prepend `[YYYY-MM-DD HH:mm:ss.zzz]` to
-     each received line.
+   - **Serial settings** — Configure baud rate, data bits, stop bits, parity,
+     flow control, and timestamps per session.
    - **Start** — Begin capturing serial data for the selected port.
      A new tab opens in LogSquirl with live output in follow mode.
    - **Stop** — Stop the capture for the selected port.
      The tab remains open with all captured output preserved.
-   - **Stop All** — Stop all active sessions.
 
-4. **Save to file** — Check "Save to file" and enter/browse a `.log` file
-   path.  Output is also written to this file alongside the LogSquirl tab.
+3. **Active Sessions** — Running sessions are listed below the controls.
+   Each session row shows the port name with:
+   - **↻** — Rotate log (close current session, start a new one)
+   - **■** — Stop the session
+
+4. **Log directory** — Set a directory path in the "Log Directory" section.
+   Use the **Browse** button or type a path directly.  Log files are
+   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.
 
 5. **Multiple ports** — Select another port, click Start again.
-   Each port gets its own tab.
+   Each port gets its own tab and session entry.
 
 6. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
    Configure.  Set the default baud rate for new sessions.
@@ -135,17 +143,21 @@ After installing, restart LogSquirl (or re-scan via *Plugins → Manage Plugins�
 graph TD
     subgraph LogSquirl Host
         H[MainWindow]
+        SB[Sidebar Panel]
     end
 
     subgraph Plugin — C ABI Boundary
         P[plugin.cpp<br/>get_info / init /<br/>shutdown / configure]
-        PW[PortWidget<br/>QDialog — session control]
+        SW[SidebarWidget<br/>port selector + session list]
+        PW[PortWidget<br/>session management]
         SP1[SerialProcess #1<br/>/dev/ttyUSB0]
         SP2[SerialProcess #2<br/>COM3]
     end
 
-    H -- register_menu_action --> P
-    P -- creates --> PW
+    H -- register_sidebar_tab --> P
+    P -- creates --> SW
+    SW -- uses --> PW
+    SW --> SB
     PW -- manages --> SP1
     PW -- manages --> SP2
     SP1 -- writes --> TF1[Temp File #1]
@@ -165,7 +177,8 @@ sequenceDiagram
     participant TF as Temp File
     participant LS as LogSquirl Tab
 
-    User->>PW: Click Start
+    User->>SW: Click Start
+    SW->>PW: startSession(config)
     PW->>SP: start()
     SP->>Port: open(ReadOnly)
     SP->>TF: create temp file
@@ -177,7 +190,8 @@ sequenceDiagram
         SP->>TF: write + flush
         LS->>TF: tail/follow reads
     end
-    User->>PW: Click Stop
+    User->>SW: Click Stop
+    SW->>PW: stopSession(portName)
     PW->>SP: preserveTempFile() + stop()
     SP->>Port: close()
     Note over LS: Tab stays open with captured output
@@ -189,7 +203,7 @@ sequenceDiagram
 |----------|-----------|
 | **Plugin type = UI** | The DataSource type is limited to 1 stream per plugin. UI type allows managing multiple independent streams. |
 | **open_file() instead of push_line()** | Each port writes to its own temp file. The host opens each file with follow/tail mode → one tab per port. |
-| **register_menu_action()** | Plugin opens a QDialog from the Plugins menu rather than embedding a widget in the status bar. Cleaner separation. |
+| **register_sidebar_tab()** | Plugin registers a sidebar widget that is always visible while the plugin is loaded. The sidebar contains port selection, serial configuration, session controls, and active session list. |
 | **QSerialPort** | Cross-platform, integrates with Qt event loop, no need for threading or external libraries. |
 | **Optional timestamps** | Embedded devices often don't include timestamps.  The plugin can prepend reception time for correlation. |
 | **No built-in filtering** | LogSquirl's regex search and highlighters are more powerful than any filter we could build. |
@@ -213,8 +227,10 @@ logsquirl-serial/
 │   ├── plugin.cpp              # C ABI entry points (get_info, init, shutdown)
 │   ├── serialprocess.h         # Serial port discovery + per-port session wrapper
 │   ├── serialprocess.cpp
-│   ├── portwidget.h            # Qt6 session dialog (QDialog)
-│   └── portwidget.cpp
+│   ├── portwidget.h            # Session management (start/stop/rotate)
+│   ├── portwidget.cpp
+│   ├── sidebarwidget.h         # LogSquirl sidebar tab (port list + controls)
+│   └── sidebarwidget.cpp
 ├── tests/
 │   ├── CMakeLists.txt          # Catch2 test setup
 │   ├── tests_main.cpp          # QApplication + Catch2 runner
