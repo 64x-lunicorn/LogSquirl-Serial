@@ -2,6 +2,8 @@
 
 [![CI Build](https://github.com/64x-lunicorn/LogSquirl-Serial/actions/workflows/ci-build.yml/badge.svg)](https://github.com/64x-lunicorn/LogSquirl-Serial/actions/workflows/ci-build.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/64x-lunicorn/LogSquirl-Serial/total)](https://github.com/64x-lunicorn/LogSquirl-Serial/releases)
+[![Commits since latest release](https://img.shields.io/github/commits-since/64x-lunicorn/LogSquirl-Serial/latest)](https://github.com/64x-lunicorn/LogSquirl-Serial/commits/main)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 A [LogSquirl](https://github.com/64x-lunicorn/LogSquirl) plugin that streams
