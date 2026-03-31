@@ -65,7 +65,7 @@ SCENARIO( "logsquirl_plugin_get_info returns valid metadata", "[plugininfo]" )
         {
             THEN( "it follows semantic versioning" )
             {
-                REQUIRE( std::strcmp( info->version, "0.1.0" ) == 0 );
+                REQUIRE( std::strcmp( info->version, "0.3.0" ) == 0 );
             }
         }
 
