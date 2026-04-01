@@ -72,8 +72,12 @@ class PortWidget : public QDialog {
     explicit PortWidget( QWidget* parent = nullptr );
     ~PortWidget() override = default;
 
-    /** Stop all active sessions.  Called during plugin shutdown. */
-    void stopAll();
+    /** Stop all active sessions.
+     *  @param cleanupTempFiles  If true, temporary log files are removed
+     *         (used during plugin shutdown).  If false, they are preserved
+     *         so that already-open tabs can still display the data.
+     */
+    void stopAll( bool cleanupTempFiles = false );
 
     /** Number of currently running sessions. */
     int activeSessionCount() const;

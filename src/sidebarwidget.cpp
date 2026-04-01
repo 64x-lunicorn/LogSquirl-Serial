@@ -403,9 +403,14 @@ void SidebarWidget::updateUiState()
 
 QString SidebarWidget::generateSavePath( const QString& portName ) const
 {
-    const auto dir = logDirEdit_->text().trimmed();
+    auto dir = logDirEdit_->text().trimmed();
     if ( dir.isEmpty() ) {
-        return {};
+        // Default to <configDir>/logs/ so that captures are always persisted.
+        const auto cfgDir = SerialProcess::configDir();
+        if ( cfgDir.isEmpty() ) {
+            return {};
+        }
+        dir = cfgDir + "/logs";
     }
 
     // Ensure the directory exists
