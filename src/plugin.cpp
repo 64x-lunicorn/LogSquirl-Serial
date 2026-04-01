@@ -169,7 +169,7 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     }
 
     if ( serial_monitor::g_state.dialog ) {
-        serial_monitor::g_state.dialog->stopAll();
+        serial_monitor::g_state.dialog->stopAll( true );
         delete serial_monitor::g_state.dialog;
         serial_monitor::g_state.dialog = nullptr;
     }

@@ -209,13 +209,15 @@ PortWidget::PortWidget( QWidget* parent )
 
 // ── Public methods ──────────────────────────────────────────────────────
 
-void PortWidget::stopAll()
+void PortWidget::stopAll( bool cleanupTempFiles )
 {
     const auto portNames = sessions_.keys();
     for ( const auto& name : portNames ) {
         if ( auto* proc = sessions_.value( name ) ) {
             proc->stop();
-            proc->preserveTempFile();
+            if ( !cleanupTempFiles ) {
+                proc->preserveTempFile();
+            }
             proc->deleteLater();
         }
     }
