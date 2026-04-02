@@ -69,7 +69,7 @@ void hostLog( int level, const char* message )
 static const LogSquirlPluginInfo kPluginInfo = {
     /* id          */ "io.github.logsquirl.serial",
     /* name        */ "Serial Monitor",
-    /* version     */ "0.3.0",
+    /* version     */ "0.4.0",
     /* description */ "Stream serial port data into LogSquirl tabs",
     /* author      */ "LogSquirl Contributors",
     /* license     */ "GPL-3.0-or-later",
