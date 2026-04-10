@@ -42,6 +42,9 @@
 #include "plugin.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -131,26 +134,34 @@ void SerialProcess::start()
         return;
     }
 
-    if ( !tempDir_.isValid() ) {
-        Q_EMIT errorOccurred( "Failed to create temporary directory." );
-        return;
-    }
-
-    // Open the temporary file for writing
-    const auto tempPath = tempDir_.path() + "/serial_" + config_.portName + ".log";
-    tempFile_.setFileName( tempPath );
-    if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
-        Q_EMIT errorOccurred( "Failed to open temp file: " + tempFile_.errorString() );
-        return;
-    }
-
-    // Optionally open the user-specified save file
+    // When a save path is configured, write directly to the log directory
+    // instead of creating a temporary file.  This avoids accumulating
+    // orphaned temp files and ensures the user's log directory is used.
     if ( !savePath_.isEmpty() ) {
-        saveFile_.setFileName( savePath_ );
-        if ( !saveFile_.open( QIODevice::WriteOnly | QIODevice::Append ) ) {
-            hostLog( LOGSQUIRL_LOG_WARNING,
-                     qPrintable( "Cannot open save file: " + saveFile_.errorString() ) );
+        QDir().mkpath( QFileInfo( savePath_ ).absolutePath() );
+        tempFile_.setFileName( savePath_ );
+        if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+            Q_EMIT errorOccurred( "Failed to open log file: " + tempFile_.errorString() );
+            return;
         }
+        usingSavePath_ = true;
+    }
+    else {
+        if ( !tempDir_.isValid() ) {
+            Q_EMIT errorOccurred( "Failed to create temporary directory." );
+            return;
+        }
+
+        // Open the temporary file for writing
+        const auto tempPath
+            = tempDir_.path() + "/serial_" + config_.portName + ".log";
+        tempFile_.setFileName( tempPath );
+        if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+            Q_EMIT errorOccurred( "Failed to open temp file: "
+                                 + tempFile_.errorString() );
+            return;
+        }
+        usingSavePath_ = false;
     }
 
     lineCount_ = 0;
@@ -224,7 +235,11 @@ void SerialProcess::stop()
 
 void SerialProcess::preserveTempFile()
 {
-    tempDir_.setAutoRemove( false );
+    // When writing directly to the log directory, the temp dir is unused
+    // and can be auto-removed safely.
+    if ( !usingSavePath_ ) {
+        tempDir_.setAutoRemove( false );
+    }
 }
 
 QString SerialProcess::rotateLog()
@@ -253,9 +268,22 @@ QString SerialProcess::rotateLog()
     ++rotationCount_;
     lineCount_ = 0;
 
-    // Open a new temp file in the same directory with an incremented suffix
-    const auto newPath = tempDir_.path() + "/serial_" + config_.portName + "_"
-                         + QString::number( rotationCount_ ) + ".log";
+    // Generate the rotated file path.  When using the log directory,
+    // create a new timestamped file there; otherwise use the temp dir.
+    QString newPath;
+    if ( usingSavePath_ ) {
+        const auto dir = QFileInfo( savePath_ ).absolutePath();
+        const auto timestamp
+            = QDateTime::currentDateTime().toString( "yyyy-MM-dd_HHmmss" );
+        auto safeName = config_.portName;
+        safeName.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
+        newPath = QDir( dir ).filePath(
+            QString( "%1_%2.log" ).arg( timestamp, safeName ) );
+    }
+    else {
+        newPath = tempDir_.path() + "/serial_" + config_.portName + "_"
+                  + QString::number( rotationCount_ ) + ".log";
+    }
     tempFile_.setFileName( newPath );
     if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
         hostLog( LOGSQUIRL_LOG_ERROR,
