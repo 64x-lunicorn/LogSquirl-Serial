@@ -88,6 +88,9 @@ class SidebarWidget : public QWidget {
     /** Periodic refresh of the active-sessions list (line counts). */
     void refreshSessionList();
 
+    /** Send the contents of the send input to the active session. */
+    void sendCommand();
+
   private:
     /** Build or rebuild the sessions list widget contents. */
     void rebuildSessionList();
@@ -129,6 +132,11 @@ class SidebarWidget : public QWidget {
     QPushButton* startButton_ = nullptr;
     QPushButton* stopButton_ = nullptr;
     QPushButton* stopAllButton_ = nullptr;
+
+    // Send command
+    QLineEdit* sendEdit_ = nullptr;
+    QPushButton* sendButton_ = nullptr;
+    QComboBox* lineEndingCombo_ = nullptr;
 
     // Log directory
     QLineEdit* logDirEdit_ = nullptr;

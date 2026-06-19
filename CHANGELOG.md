@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] — 2026-04-02
 
 ### Added
+- **Serial TX commands** — added command input + send button in both the
+  sidebar panel and the port dialog, with configurable line endings
+  (`CRLF`, `LF`, `CR`, `None`).
+- **TX logging** — sent commands are now written into the active log stream
+  and marked with `[TX]` for visibility in LogSquirl tabs.
+
+### Changed
+- **Serial port mode** — sessions now open ports in read/write mode to support
+  interactive command transmission while receiving data.
+
+## [0.4.0] — 2026-04-02
+
+### Added
 - **Plugin icon** — added `icon` field to `plugin.json` for display in the
   host Plugin Management dialog.
 - **Decentralized registry** — added `releases.json` with per-platform download
