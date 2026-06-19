@@ -61,6 +61,14 @@ namespace serial_monitor {
  * constructor.  Sensible defaults match the most common embedded
  * device configuration: 115200 8N1, no flow control, timestamps on.
  */
+/// Line ending appended to transmitted data.
+enum class TxLineEnding {
+    None,  ///< No line ending appended.
+    CR,    ///< Carriage return (\r).
+    LF,    ///< Line feed (\n).
+    CRLF   ///< Carriage return + line feed (\r\n).
+};
+
 struct SerialConfig {
     QString portName;
     qint32 baudRate = 115200;
@@ -69,6 +77,7 @@ struct SerialConfig {
     QSerialPort::Parity parity = QSerialPort::NoParity;
     QSerialPort::FlowControl flowControl = QSerialPort::NoFlowControl;
     bool timestamps = true; ///< Prepend [YYYY-MM-DD HH:mm:ss.zzz] to each line.
+    TxLineEnding txLineEnding = TxLineEnding::CRLF; ///< Line ending for sent data.
 };
 
 /**
@@ -144,6 +153,18 @@ class SerialProcess : public QObject {
     void stop();
 
     /**
+     * Send data to the serial port and log it as a TX line.
+     *
+     * Appends the configured line ending (txLineEnding) to the data before
+     * transmission.  The sent command is also written to the log file with
+     * a [TX] marker so it appears in the LogSquirl tab.
+     *
+     * @param data  Raw bytes to send (line ending is appended automatically).
+     * @return true if the data was written successfully, false otherwise.
+     */
+    bool sendData( const QByteArray& data );
+
+    /**
      * Prevent the temporary log file from being deleted when this
      * object is destroyed.  Call before deleteLater() so that the
      * LogSquirl tab can keep displaying the captured output.
@@ -165,6 +186,12 @@ class SerialProcess : public QObject {
 
     /** The port name this session is attached to. */
     const QString& portName() const { return config_.portName; }
+
+    /** Return the current configuration. */
+    const SerialConfig& config() const { return config_; }
+
+    /** Update the TX line ending for subsequent sendData() calls. */
+    void setTxLineEnding( TxLineEnding ending ) { config_.txLineEnding = ending; }
 
     /**
      * Absolute path to the log file (save path or temp file).
@@ -191,6 +218,9 @@ class SerialProcess : public QObject {
 
     /** Emitted when an error occurs (port not found, permission denied, …). */
     void errorOccurred( const QString& message );
+
+    /** Emitted after data has been sent to the serial port. */
+    void dataSent( const QByteArray& data );
 
   private Q_SLOTS:
     /** Handle new data available on the serial port. */

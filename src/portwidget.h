@@ -122,6 +122,18 @@ class PortWidget : public QDialog {
      */
     bool isSessionActive( const QString& portName ) const;
 
+    /**
+     * Send data to an active serial session.
+     *
+     * @param portName     Port name of the target session.
+     * @param data         Raw bytes to send.
+     * @param lineEnding   Line ending to append before transmission.
+     * @return true if sent successfully, false otherwise.
+     */
+    bool sendToSession( const QString& portName,
+                        const QByteArray& data,
+                        TxLineEnding lineEnding );
+
   private Q_SLOTS:
     /** Re-scan for serial ports and update the combo box. */
     void refreshPorts();
@@ -137,6 +149,9 @@ class PortWidget : public QDialog {
 
     /** Let the user browse for a save file path. */
     void browseSavePath();
+
+    /** Send the contents of the send input to the active session. */
+    void sendCapture();
 
     /** Handle a session ending (cleanup bookkeeping). */
     void onSessionFinished( const QString& portName );
@@ -175,6 +190,11 @@ class PortWidget : public QDialog {
     QCheckBox* saveCheckBox_ = nullptr;
     QLineEdit* savePathEdit_ = nullptr;
     QPushButton* browseButton_ = nullptr;
+
+    // Send command
+    QLineEdit* sendEdit_ = nullptr;
+    QPushButton* sendButton_ = nullptr;
+    QComboBox* lineEndingCombo_ = nullptr;
 
     // Status
     QLabel* statusLabel_ = nullptr;

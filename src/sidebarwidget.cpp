@@ -143,6 +143,36 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     buttonRow->addWidget( stopButton_ );
     mainLayout->addLayout( buttonRow );
 
+    // ── Send command ─────────────────────────────────────────────────
+    auto* sendGroup = new QGroupBox( "Send", this );
+    auto* sendLayout = new QVBoxLayout( sendGroup );
+    sendLayout->setContentsMargins( 6, 6, 6, 6 );
+
+    auto* sendRow = new QHBoxLayout();
+    sendEdit_ = new QLineEdit( this );
+    sendEdit_->setPlaceholderText( "Enter command\u2026" );
+    sendEdit_->setToolTip( "Type a command to send to the serial port" );
+    sendRow->addWidget( sendEdit_ );
+
+    sendButton_ = new QPushButton( "\u27A4 Send", this );
+    sendButton_->setToolTip( "Send command to the active serial port" );
+    sendRow->addWidget( sendButton_ );
+    sendLayout->addLayout( sendRow );
+
+    auto* lineEndingRow = new QHBoxLayout();
+    auto* lineEndingLabel = new QLabel( "Line ending:", this );
+    lineEndingRow->addWidget( lineEndingLabel );
+    lineEndingCombo_ = new QComboBox( this );
+    lineEndingCombo_->addItem( "CRLF (\\r\\n)", static_cast<int>( serial_monitor::TxLineEnding::CRLF ) );
+    lineEndingCombo_->addItem( "LF (\\n)", static_cast<int>( serial_monitor::TxLineEnding::LF ) );
+    lineEndingCombo_->addItem( "CR (\\r)", static_cast<int>( serial_monitor::TxLineEnding::CR ) );
+    lineEndingCombo_->addItem( "None", static_cast<int>( serial_monitor::TxLineEnding::None ) );
+    lineEndingCombo_->setCurrentIndex( 0 );
+    lineEndingRow->addWidget( lineEndingCombo_ );
+    sendLayout->addLayout( lineEndingRow );
+
+    mainLayout->addWidget( sendGroup );
+
     // ── Log directory ────────────────────────────────────────────────
     auto* logDirGroup = new QGroupBox( "Log Directory", this );
     auto* logDirLayout = new QHBoxLayout( logDirGroup );
@@ -194,6 +224,10 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
              this, &SidebarWidget::stopSelectedCapture );
     connect( stopAllButton_, &QPushButton::clicked,
              this, &SidebarWidget::stopAllCaptures );
+    connect( sendButton_, &QPushButton::clicked,
+             this, &SidebarWidget::sendCommand );
+    connect( sendEdit_, &QLineEdit::returnPressed,
+             this, &SidebarWidget::sendCommand );
     connect( logDirBrowseButton_, &QPushButton::clicked, this, [this]() {
         const auto dir = QFileDialog::getExistingDirectory(
             this, "Select Log Directory", logDirEdit_->text() );
@@ -297,6 +331,34 @@ void SidebarWidget::stopAllCaptures()
     refreshPorts();
 }
 
+void SidebarWidget::sendCommand()
+{
+    const auto text = sendEdit_->text();
+    if ( text.isEmpty() ) {
+        return;
+    }
+
+    const auto name = currentPortName();
+    if ( name.isEmpty() || !portWidget_->isSessionActive( name ) ) {
+        // Fall back to first active session if current port has none
+        const auto active = portWidget_->activePorts();
+        if ( active.isEmpty() ) {
+            return;
+        }
+        const auto target = active.first();
+        const auto lineEnding = static_cast<TxLineEnding>(
+            lineEndingCombo_->currentData().toInt() );
+        portWidget_->sendToSession( target, text.toUtf8(), lineEnding );
+    }
+    else {
+        const auto lineEnding = static_cast<TxLineEnding>(
+            lineEndingCombo_->currentData().toInt() );
+        portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
+    }
+
+    sendEdit_->clear();
+}
+
 void SidebarWidget::refreshSessionList()
 {
     const int currentCount = portWidget_->activeSessionCount();
@@ -377,6 +439,8 @@ SerialConfig SidebarWidget::buildConfig() const
     config.flowControl = static_cast<QSerialPort::FlowControl>(
         flowControlCombo_->currentData().toInt() );
     config.timestamps = timestampCheckBox_->isChecked();
+    config.txLineEnding = static_cast<TxLineEnding>(
+        lineEndingCombo_->currentData().toInt() );
     return config;
 }
 
@@ -391,6 +455,12 @@ void SidebarWidget::updateUiState()
     stopButton_->setEnabled( isActive );
     stopAllButton_->setEnabled( activeCount > 0 );
     stopAllButton_->setVisible( activeCount > 1 );
+
+    // Send controls are enabled when any session is active
+    const bool canSend = activeCount > 0;
+    sendEdit_->setEnabled( canSend );
+    sendButton_->setEnabled( canSend );
+    lineEndingCombo_->setEnabled( canSend );
 
     if ( activeCount == 0 ) {
         statusLabel_->setText( {} );

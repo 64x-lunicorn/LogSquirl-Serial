@@ -175,7 +175,7 @@ void SerialProcess::start()
     port_.setParity( config_.parity );
     port_.setFlowControl( config_.flowControl );
 
-    if ( !port_.open( QIODevice::ReadOnly ) ) {
+    if ( !port_.open( QIODevice::ReadWrite ) ) {
         Q_EMIT errorOccurred(
             QString( "Failed to open port %1: %2" )
                 .arg( config_.portName, port_.errorString() ) );
@@ -231,6 +231,51 @@ void SerialProcess::stop()
                              .arg( config_.portName )
                              .arg( lineCount_ ) ) );
     Q_EMIT finished();
+}
+
+bool SerialProcess::sendData( const QByteArray& data )
+{
+    if ( !isRunning() ) {
+        return false;
+    }
+
+    // Append the configured line ending
+    QByteArray payload = data;
+    switch ( config_.txLineEnding ) {
+    case TxLineEnding::CR:
+        payload.append( '\r' );
+        break;
+    case TxLineEnding::LF:
+        payload.append( '\n' );
+        break;
+    case TxLineEnding::CRLF:
+        payload.append( "\r\n" );
+        break;
+    case TxLineEnding::None:
+        break;
+    }
+
+    const auto written = port_.write( payload );
+    if ( written < 0 ) {
+        Q_EMIT errorOccurred(
+            QString( "Failed to write to %1: %2" )
+                .arg( config_.portName, port_.errorString() ) );
+        return false;
+    }
+
+    // Log the sent data as a [TX] line in the output file
+    if ( config_.timestamps ) {
+        const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
+        tempFile_.write( "[" + ts.toUtf8() + "] " );
+    }
+    tempFile_.write( "[TX] " );
+    tempFile_.write( data );
+    tempFile_.write( "\n", 1 );
+    tempFile_.flush();
+    ++lineCount_;
+
+    Q_EMIT dataSent( data );
+    return true;
 }
 
 void SerialProcess::preserveTempFile()

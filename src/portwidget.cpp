@@ -169,6 +169,35 @@ PortWidget::PortWidget( QWidget* parent )
 
     mainLayout->addWidget( saveGroup );
 
+    // ── Send command group ───────────────────────────────────────────
+    auto* sendGroup = new QGroupBox( "Send Command", this );
+    auto* sendLayout = new QVBoxLayout( sendGroup );
+
+    auto* sendRow = new QHBoxLayout();
+    sendEdit_ = new QLineEdit( this );
+    sendEdit_->setPlaceholderText( "Enter command\u2026" );
+    sendEdit_->setToolTip( "Type a command to send to the serial port" );
+    sendRow->addWidget( sendEdit_ );
+
+    sendButton_ = new QPushButton( "\u27A4 Send", this );
+    sendButton_->setToolTip( "Send command to the active serial port" );
+    sendRow->addWidget( sendButton_ );
+    sendLayout->addLayout( sendRow );
+
+    auto* lineEndingRow = new QHBoxLayout();
+    auto* lineEndingLabel = new QLabel( "Line ending:", this );
+    lineEndingRow->addWidget( lineEndingLabel );
+    lineEndingCombo_ = new QComboBox( this );
+    lineEndingCombo_->addItem( "CRLF (\\r\\n)", static_cast<int>( TxLineEnding::CRLF ) );
+    lineEndingCombo_->addItem( "LF (\\n)", static_cast<int>( TxLineEnding::LF ) );
+    lineEndingCombo_->addItem( "CR (\\r)", static_cast<int>( TxLineEnding::CR ) );
+    lineEndingCombo_->addItem( "None", static_cast<int>( TxLineEnding::None ) );
+    lineEndingCombo_->setCurrentIndex( 0 );
+    lineEndingRow->addWidget( lineEndingCombo_ );
+    sendLayout->addLayout( lineEndingRow );
+
+    mainLayout->addWidget( sendGroup );
+
     // ── Status line ──────────────────────────────────────────────────
     statusLabel_ = new QLabel( this );
     statusLabel_->setStyleSheet( "color: gray; font-style: italic;" );
@@ -191,6 +220,10 @@ PortWidget::PortWidget( QWidget* parent )
              savePathEdit_, &QLineEdit::setEnabled );
     connect( saveCheckBox_, &QCheckBox::toggled,
              browseButton_, &QPushButton::setEnabled );
+    connect( sendButton_, &QPushButton::clicked,
+             this, &PortWidget::sendCapture );
+    connect( sendEdit_, &QLineEdit::returnPressed,
+             this, &PortWidget::sendCapture );
     connect( portCombo_, &QComboBox::currentIndexChanged,
              this, [this]() { updateUiState(); } );
 
@@ -342,6 +375,20 @@ bool PortWidget::isSessionActive( const QString& portName ) const
     return sessions_.contains( portName );
 }
 
+bool PortWidget::sendToSession( const QString& portName,
+                                const QByteArray& data,
+                                TxLineEnding lineEnding )
+{
+    auto* proc = sessions_.value( portName, nullptr );
+    if ( !proc || !proc->isRunning() ) {
+        return false;
+    }
+
+    // Set the line ending for this transmission and send
+    proc->setTxLineEnding( lineEnding );
+    return proc->sendData( data );
+}
+
 // ── Private slots ───────────────────────────────────────────────────────
 
 void PortWidget::refreshPorts()
@@ -483,6 +530,24 @@ void PortWidget::browseSavePath()
     }
 }
 
+void PortWidget::sendCapture()
+{
+    const auto text = sendEdit_->text();
+    if ( text.isEmpty() ) {
+        return;
+    }
+
+    const auto name = currentPortName();
+    if ( name.isEmpty() || !sessions_.contains( name ) ) {
+        return;
+    }
+
+    const auto lineEnding = static_cast<TxLineEnding>(
+        lineEndingCombo_->currentData().toInt() );
+    sendToSession( name, text.toUtf8(), lineEnding );
+    sendEdit_->clear();
+}
+
 void PortWidget::onSessionFinished( const QString& portName )
 {
     if ( sessions_.contains( portName ) ) {
@@ -523,6 +588,11 @@ void PortWidget::updateUiState()
     startButton_->setEnabled( hasPort && !isActive );
     stopButton_->setEnabled( isActive );
     stopAllButton_->setEnabled( anyActive );
+
+    // Send controls enabled when the currently selected port has an active session
+    sendEdit_->setEnabled( isActive );
+    sendButton_->setEnabled( isActive );
+    lineEndingCombo_->setEnabled( isActive );
 
     if ( anyActive ) {
         statusLabel_->setText(
