@@ -1,43 +1,115 @@
-# logsquirl-serial — Serial Monitor Plugin for LogSquirl
+<!-- Allow GitHub's presentation markup and a logo before the main heading. -->
+<!-- markdownlint-configure-file {"MD033": {"allowed_elements": ["div", "img"]}, "MD041": false} -->
 
-[![CI Build](https://github.com/64x-lunicorn/LogSquirl-Serial/actions/workflows/ci-build.yml/badge.svg)](https://github.com/64x-lunicorn/LogSquirl-Serial/actions/workflows/ci-build.yml)
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/64x-lunicorn/LogSquirl-Serial/total)](https://github.com/64x-lunicorn/LogSquirl-Serial/releases)
-[![Commits since latest release](https://img.shields.io/github/commits-since/64x-lunicorn/LogSquirl-Serial/latest)](https://github.com/64x-lunicorn/LogSquirl-Serial/commits/main)
-[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
+<div align="center">
 
-A [LogSquirl](https://github.com/64x-lunicorn/LogSquirl) plugin that streams
-serial port data from connected devices directly into LogSquirl tabs.
-Supports **multiple parallel ports**, full **serial parameter configuration**
-(baud rate, data bits, stop bits, parity, flow control), optional
-**line timestamps**, a configurable **log directory** with automatic filenames,
-and a **sidebar panel** for port selection and session control.
+<img src="icon.png" alt="Serial Monitor plugin icon" width="96">
 
-This plugin also serves as a **reference implementation / sample plugin** for
-the LogSquirl Plugin SDK.  Every design decision is documented, and the code
-is heavily commented to help you build your own plugins.
+# Serial Monitor
 
-## Features
+**Every port its own tab.**
 
-- **Port Discovery** — Automatic serial port enumeration with one-click refresh
-- **Multi-Port** — Capture data from multiple serial ports simultaneously
-- **Live Tailing** — Each port opens in its own LogSquirl tab with follow mode
-- **Full Serial Config** — Baud rate, data bits, stop bits, parity, and flow
-  control — all configurable per session
-- **Timestamps** — Optional `[YYYY-MM-DD HH:mm:ss.zzz]` prefix on each received line
-- **Log Directory** — Configurable log save path with automatic filename
-  generation (`YYYY-MM-dd_HHmmss_<portName>.log`); path is persisted across
-  sessions
-- **Sidebar Panel** — Integrated sidebar tab with port dropdown, serial
-  configuration, start/stop, and active session list with rotate and stop
-  buttons
-- **Persistent Logs** — Captured output remains visible in LogSquirl after
-  stopping a session
-- **Bluetooth Filtering** — Virtual Bluetooth serial ports are automatically
-  hidden from the port list
-- **Cross-Platform** — Works on macOS, Linux, and Windows
-- **Use LogSquirl Filters** — No built-in filtering; leverage LogSquirl's
-  powerful regex search and highlighters on the raw serial output
+**A [LogSquirl](https://github.com/64x-lunicorn/LogSquirl) plugin that streams
+serial data straight into the log viewer.**
+
+Open several ports at once, set baud rate and parity per session, and read the
+output with the same regex search and highlighters you use on any other log.
+
+[![CI Build](https://img.shields.io/github/actions/workflow/status/64x-lunicorn/LogSquirl-Serial/ci-build.yml?branch=main&label=build&style=flat-square)](https://github.com/64x-lunicorn/LogSquirl-Serial/actions/workflows/ci-build.yml)
+[![Latest release](https://img.shields.io/github/v/release/64x-lunicorn/LogSquirl-Serial?style=flat-square&color=f97316)](https://github.com/64x-lunicorn/LogSquirl-Serial/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/64x-lunicorn/LogSquirl-Serial/total?style=flat-square)](https://github.com/64x-lunicorn/LogSquirl-Serial/releases)
+[![Platforms](https://img.shields.io/badge/platforms-macOS_%7C_Linux_%7C_Windows-334155?style=flat-square)](#install)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-3b82f6?style=flat-square)](LICENSE)
+
+[Install](#install) &nbsp;/&nbsp;
+[Usage](#usage) &nbsp;/&nbsp;
+[Build](#build) &nbsp;/&nbsp;
+[Architecture](#architecture) &nbsp;/&nbsp;
+[Changelog](CHANGELOG.md)
+
+</div>
+
+---
+
+## Why this plugin?
+
+A serial console shows you the last screenful and forgets the rest. Piping to a
+file means you stop watching. This plugin puts the stream where your other logs
+already are.
+
+| Less setup | More signal |
+| :--- | :--- |
+| **Ports found for you.** Automatic enumeration with one-click refresh; virtual Bluetooth ports are hidden so the list stays short. | **Configure the link.** Baud rate, data bits, stop bits, parity and flow control, set per session. |
+| **Every port its own tab.** Start as many as you like — each opens its own LogSquirl tab in follow mode. | **Timestamped on arrival.** Optional `[YYYY-MM-DD HH:mm:ss.zzz]` prefix, for devices that send none. |
+| **Nothing lost on stop.** Captured output stays in the tab after the session ends. | **Filter with the host.** No filter UI of its own — LogSquirl's regex search and highlighters do it better. |
+| **Written to disk.** Configurable log directory, automatic `YYYY-MM-dd_HHmmss_<port>.log` names, path remembered. | **A worked example.** Heavily commented reference implementation for the Plugin SDK. |
+
+## Install
+
+### From LogSquirl
+
+*Plugins → Browse Plugins…* → **Serial Monitor** → **Install**. The archive is
+downloaded, verified against its SHA-256 checksum and loaded — no file copying.
+
+### From a release
+
+Download the archive for your platform from the
+[releases page](https://github.com/64x-lunicorn/LogSquirl-Serial/releases/latest)
+and unpack it into LogSquirl's plugin directory:
+
+| Platform | Plugin Directory |
+|----------|-----------------|
+| macOS    | `~/Library/Application Support/logsquirl/plugins/io.github.logsquirl.serial/` |
+| Linux    | `~/.local/share/logsquirl/plugins/io.github.logsquirl.serial/` |
+| Windows  | `%APPDATA%/logsquirl/plugins/io.github.logsquirl.serial/` |
+
+### From source
+
+See [Build](#build), then:
+
+```bash
+DEST="$HOME/Library/Application Support/logsquirl/plugins/io.github.logsquirl.serial"
+mkdir -p "$DEST"
+cp build/liblogsquirl_serial.dylib "$DEST/"
+cp plugin.json icon.png "$DEST/"
+```
+
+Or `cmake --install build --prefix "$HOME/.local"`.
+
+After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins…*.
+
+## Usage
+
+1. **Enable the plugin** in *Plugins → Manage Plugins…* — check
+   "Serial Monitor" and click OK.  (On first run, the plugin is
+   auto-enabled if no other plugins are configured.)
+
+2. The **Serial** sidebar tab appears automatically.  Use the sidebar panel
+   to manage sessions:
+
+   - **Port dropdown** — Select a connected serial port.
+   - **Refresh** — Re-scan for serial ports.
+   - **Serial settings** — Configure baud rate, data bits, stop bits, parity,
+     flow control, and timestamps per session.
+   - **Start** — Begin capturing serial data for the selected port.
+     A new tab opens in LogSquirl with live output in follow mode.
+   - **Stop** — Stop the capture for the selected port.
+     The tab remains open with all captured output preserved.
+
+3. **Active Sessions** — Running sessions are listed below the controls.
+   Each session row shows the port name with:
+   - **↻** — Rotate log (close current session, start a new one)
+   - **■** — Stop the session
+
+4. **Log directory** — Set a directory path in the "Log Directory" section.
+   Use the **Browse** button or type a path directly.  Log files are
+   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.
+
+5. **Multiple ports** — Select another port, click Start again.
+   Each port gets its own tab and session entry.
+
+6. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
+   Configure.  Set the default baud rate for new sessions.
 
 ## Prerequisites
 
@@ -76,66 +148,6 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
 cmake --build build
 cd build && ctest --output-on-failure
 ```
-
-## Install
-
-Copy the plugin library **and** `plugin.json` into one of LogSquirl's
-plugin search directories:
-
-| Platform | Plugin Directory |
-|----------|-----------------|
-| macOS    | `~/Library/Application Support/logsquirl/plugins/io.github.logsquirl.serial/` |
-| Linux    | `~/.local/share/logsquirl/plugins/io.github.logsquirl.serial/` |
-| Windows  | `%APPDATA%/logsquirl/plugins/io.github.logsquirl.serial/` |
-
-```bash
-# Example for macOS:
-DEST="$HOME/Library/Application Support/logsquirl/plugins/io.github.logsquirl.serial"
-mkdir -p "$DEST"
-cp build/liblogsquirl_serial.dylib "$DEST/"
-cp plugin.json "$DEST/"
-```
-
-Or use `cmake --install`:
-
-```bash
-cmake --install build --prefix "$HOME/.local"
-```
-
-After installing, restart LogSquirl (or re-scan via *Plugins → Manage Plugins…*).
-
-## Usage
-
-1. **Enable the plugin** in *Plugins → Manage Plugins…* — check
-   "Serial Monitor" and click OK.  (On first run, the plugin is
-   auto-enabled if no other plugins are configured.)
-
-2. The **Serial** sidebar tab appears automatically.  Use the sidebar panel
-   to manage sessions:
-
-   - **Port dropdown** — Select a connected serial port.
-   - **Refresh** — Re-scan for serial ports.
-   - **Serial settings** — Configure baud rate, data bits, stop bits, parity,
-     flow control, and timestamps per session.
-   - **Start** — Begin capturing serial data for the selected port.
-     A new tab opens in LogSquirl with live output in follow mode.
-   - **Stop** — Stop the capture for the selected port.
-     The tab remains open with all captured output preserved.
-
-3. **Active Sessions** — Running sessions are listed below the controls.
-   Each session row shows the port name with:
-   - **↻** — Rotate log (close current session, start a new one)
-   - **■** — Stop the session
-
-4. **Log directory** — Set a directory path in the "Log Directory" section.
-   Use the **Browse** button or type a path directly.  Log files are
-   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.
-
-5. **Multiple ports** — Select another port, click Start again.
-   Each port gets its own tab and session entry.
-
-6. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
-   Configure.  Set the default baud rate for new sessions.
 
 ## Architecture
 
@@ -244,19 +256,20 @@ logsquirl-serial/
 ## Plugin Registry
 
 This plugin is listed in the
-[LogSquirl-Plugins](https://github.com/64x-lunicorn/LogSquirl-Plugins) registry.
-LogSquirl users can install it directly from **Plugins → Browse Plugins…** without
-manual file copying.
+[LogSquirl-Plugins](https://github.com/64x-lunicorn/LogSquirl-Plugins) catalog,
+so it installs from **Plugins → Browse Plugins…** with no manual file copying.
 
-When publishing a new release, update the corresponding entries in
-[`plugins.json`](https://github.com/64x-lunicorn/LogSquirl-Plugins/blob/main/plugins.json)
-via pull request — see the
-[Contributing Guide](https://github.com/64x-lunicorn/LogSquirl-Plugins/blob/main/CONTRIBUTING.md).
+The catalog holds **one entry per plugin** and does not change between releases.
+Versions, download URLs and checksums live in this repository's
+[`releases.json`](releases.json) — update that when you publish a release, and
+fill in every `sha256`: an empty checksum silently disables verification in the
+host.
 
 ```mermaid
 flowchart LR
-    LS["LogSquirl"] -- "GET plugins.json" --> PR["LogSquirl-Plugins\n(registry)"]
-    PR -- "download_url" --> R["LogSquirl-Serial\n(this repo's releases)"]
+    LS["LogSquirl"] -- "GET plugins.json" --> C["LogSquirl-Plugins<br/>(catalog)"]
+    C -- "releases_url" --> RJ["releases.json<br/>(this repo)"]
+    RJ -- "download_url + sha256" --> Z["Serial Monitor release ZIP"]
 ```
 
 ## Using This as a Plugin Template
