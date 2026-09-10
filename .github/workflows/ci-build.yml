@@ -157,6 +157,7 @@ jobs:
           mkdir -p staging
           cp build/${{ matrix.lib-name }} staging/
           cp plugin.json staging/
+          cp icon.png staging/
 
       # ── macOS: bundle QtSerialPort.framework alongside the plugin ───────
       # The host app does not ship QtSerialPort — the plugin must carry it.
