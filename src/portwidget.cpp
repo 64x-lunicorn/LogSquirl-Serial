@@ -85,8 +85,8 @@ PortWidget::PortWidget( QWidget* parent )
     auto* settingsLayout = new QFormLayout( settingsGroup );
 
     baudCombo_ = new QComboBox( this );
-    const QList<int> baudRates = { 300, 1200, 2400, 4800, 9600, 19200,
-                                   38400, 57600, 115200, 230400, 460800, 921600 };
+    const QList<int> baudRates
+        = { 300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 };
     for ( const auto rate : baudRates ) {
         baudCombo_->addItem( QString::number( rate ), rate );
     }
@@ -206,26 +206,16 @@ PortWidget::PortWidget( QWidget* parent )
     mainLayout->addStretch();
 
     // ── Connect signals ──────────────────────────────────────────────
-    connect( refreshButton_, &QPushButton::clicked,
-             this, &PortWidget::refreshPorts );
-    connect( startButton_, &QPushButton::clicked,
-             this, &PortWidget::startCapture );
-    connect( stopButton_, &QPushButton::clicked,
-             this, &PortWidget::stopCapture );
-    connect( stopAllButton_, &QPushButton::clicked,
-             this, &PortWidget::stopAllCaptures );
-    connect( browseButton_, &QPushButton::clicked,
-             this, &PortWidget::browseSavePath );
-    connect( saveCheckBox_, &QCheckBox::toggled,
-             savePathEdit_, &QLineEdit::setEnabled );
-    connect( saveCheckBox_, &QCheckBox::toggled,
-             browseButton_, &QPushButton::setEnabled );
-    connect( sendButton_, &QPushButton::clicked,
-             this, &PortWidget::sendCapture );
-    connect( sendEdit_, &QLineEdit::returnPressed,
-             this, &PortWidget::sendCapture );
-    connect( portCombo_, &QComboBox::currentIndexChanged,
-             this, [this]() { updateUiState(); } );
+    connect( refreshButton_, &QPushButton::clicked, this, &PortWidget::refreshPorts );
+    connect( startButton_, &QPushButton::clicked, this, &PortWidget::startCapture );
+    connect( stopButton_, &QPushButton::clicked, this, &PortWidget::stopCapture );
+    connect( stopAllButton_, &QPushButton::clicked, this, &PortWidget::stopAllCaptures );
+    connect( browseButton_, &QPushButton::clicked, this, &PortWidget::browseSavePath );
+    connect( saveCheckBox_, &QCheckBox::toggled, savePathEdit_, &QLineEdit::setEnabled );
+    connect( saveCheckBox_, &QCheckBox::toggled, browseButton_, &QPushButton::setEnabled );
+    connect( sendButton_, &QPushButton::clicked, this, &PortWidget::sendCapture );
+    connect( sendEdit_, &QLineEdit::returnPressed, this, &PortWidget::sendCapture );
+    connect( portCombo_, &QComboBox::currentIndexChanged, this, [ this ]() { updateUiState(); } );
 
     // Load default baud rate from config
     const auto defaults = SerialProcess::defaultConfig();
@@ -281,9 +271,8 @@ void PortWidget::rotateSession( const QString& portName )
     const auto newPath = proc->rotateLog();
     if ( newPath.isEmpty() ) {
         if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification(
-                g_state.handle,
-                qPrintable( "Failed to rotate log for " + portName ) );
+            g_state.api->show_notification( g_state.handle,
+                                            qPrintable( "Failed to rotate log for " + portName ) );
         }
         return;
     }
@@ -292,8 +281,7 @@ void PortWidget::rotateSession( const QString& portName )
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, newPath.toUtf8().constData(), 1 );
         g_state.api->show_notification(
-            g_state.handle,
-            qPrintable( QString( "New session started for %1" ).arg( portName ) ) );
+            g_state.handle, qPrintable( QString( "New session started for %1" ).arg( portName ) ) );
     }
 }
 
@@ -306,18 +294,15 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
 
     auto* proc = new SerialProcess( config, savePath, this );
 
-    connect( proc, &SerialProcess::started, this, [this, name]() {
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 qPrintable( "Serial session started for " + name ) );
+    connect( proc, &SerialProcess::started, this, [ this, name ]() {
+        hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Serial session started for " + name ) );
     } );
 
-    connect( proc, &SerialProcess::finished, this, [this, name]() {
-        onSessionFinished( name );
-    } );
+    connect( proc, &SerialProcess::finished, this,
+             [ this, name ]() { onSessionFinished( name ); } );
 
-    connect( proc, &SerialProcess::errorOccurred, this, [this, name]( const QString& msg ) {
-        onSessionError( name, msg );
-    } );
+    connect( proc, &SerialProcess::errorOccurred, this,
+             [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
 
     proc->start();
 
@@ -328,10 +313,9 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
             const auto path = proc->tempFilePath().toUtf8();
             g_state.api->open_file( g_state.handle, path.constData(), 1 );
             g_state.api->show_notification(
-                g_state.handle,
-                qPrintable( QString( "Serial capture started for %1 at %2 baud" )
-                                .arg( name )
-                                .arg( config.baudRate ) ) );
+                g_state.handle, qPrintable( QString( "Serial capture started for %1 at %2 baud" )
+                                                .arg( name )
+                                                .arg( config.baudRate ) ) );
         }
 
         refreshPorts();
@@ -354,10 +338,9 @@ void PortWidget::stopSession( const QString& portName )
 
     if ( g_state.api && g_state.handle ) {
         g_state.api->show_notification(
-            g_state.handle,
-            qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
-                            .arg( portName )
-                            .arg( proc->lineCount() ) ) );
+            g_state.handle, qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
+                                            .arg( portName )
+                                            .arg( proc->lineCount() ) ) );
     }
 
     proc->deleteLater();
@@ -375,8 +358,7 @@ bool PortWidget::isSessionActive( const QString& portName ) const
     return sessions_.contains( portName );
 }
 
-bool PortWidget::sendToSession( const QString& portName,
-                                const QByteArray& data,
+bool PortWidget::sendToSession( const QString& portName, const QByteArray& data,
                                 TxLineEnding lineEnding )
 {
     auto* proc = sessions_.value( portName, nullptr );
@@ -445,18 +427,15 @@ void PortWidget::startCapture()
     auto config = buildConfig();
     auto* proc = new SerialProcess( config, savePath, this );
 
-    connect( proc, &SerialProcess::started, this, [this, name]() {
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 qPrintable( "Serial session started for " + name ) );
+    connect( proc, &SerialProcess::started, this, [ this, name ]() {
+        hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Serial session started for " + name ) );
     } );
 
-    connect( proc, &SerialProcess::finished, this, [this, name]() {
-        onSessionFinished( name );
-    } );
+    connect( proc, &SerialProcess::finished, this,
+             [ this, name ]() { onSessionFinished( name ); } );
 
-    connect( proc, &SerialProcess::errorOccurred, this, [this, name]( const QString& msg ) {
-        onSessionError( name, msg );
-    } );
+    connect( proc, &SerialProcess::errorOccurred, this,
+             [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
 
     proc->start();
 
@@ -472,10 +451,9 @@ void PortWidget::startCapture()
         // Notify via host notification
         if ( g_state.api && g_state.handle ) {
             g_state.api->show_notification(
-                g_state.handle,
-                qPrintable( QString( "Serial capture started for %1 at %2 baud" )
-                                .arg( name )
-                                .arg( config.baudRate ) ) );
+                g_state.handle, qPrintable( QString( "Serial capture started for %1 at %2 baud" )
+                                                .arg( name )
+                                                .arg( config.baudRate ) ) );
         }
     }
     else {
@@ -499,10 +477,9 @@ void PortWidget::stopCapture()
 
     if ( g_state.api && g_state.handle ) {
         g_state.api->show_notification(
-            g_state.handle,
-            qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
-                            .arg( name )
-                            .arg( proc->lineCount() ) ) );
+            g_state.handle, qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
+                                            .arg( name )
+                                            .arg( proc->lineCount() ) ) );
     }
 
     refreshPorts();
@@ -521,9 +498,9 @@ void PortWidget::stopAllCaptures()
 
 void PortWidget::browseSavePath()
 {
-    const auto path = QFileDialog::getSaveFileName(
-        this, "Save serial output", savePathEdit_->text(),
-        "Log files (*.log *.txt);;All files (*)" );
+    const auto path
+        = QFileDialog::getSaveFileName( this, "Save serial output", savePathEdit_->text(),
+                                        "Log files (*.log *.txt);;All files (*)" );
 
     if ( !path.isEmpty() ) {
         savePathEdit_->setText( path );
@@ -542,8 +519,7 @@ void PortWidget::sendCapture()
         return;
     }
 
-    const auto lineEnding = static_cast<TxLineEnding>(
-        lineEndingCombo_->currentData().toInt() );
+    const auto lineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
     sendToSession( name, text.toUtf8(), lineEnding );
     sendEdit_->clear();
 }
@@ -571,8 +547,7 @@ void PortWidget::onSessionError( const QString& portName, const QString& message
 
     if ( g_state.api && g_state.handle ) {
         g_state.api->show_notification(
-            g_state.handle,
-            qPrintable( "Serial error (" + portName + "): " + message ) );
+            g_state.handle, qPrintable( "Serial error (" + portName + "): " + message ) );
     }
 }
 
@@ -595,8 +570,7 @@ void PortWidget::updateUiState()
     lineEndingCombo_->setEnabled( isActive );
 
     if ( anyActive ) {
-        statusLabel_->setText(
-            QString( "%1 active session(s)" ).arg( sessions_.size() ) );
+        statusLabel_->setText( QString( "%1 active session(s)" ).arg( sessions_.size() ) );
     }
     else {
         statusLabel_->setText( "No active sessions" );

@@ -44,8 +44,8 @@
 #include "plugin.h"
 
 #include "portwidget.h"
-#include "sidebarwidget.h"
 #include "serialprocess.h"
+#include "sidebarwidget.h"
 
 #include <QInputDialog>
 #include <QSettings>
@@ -69,7 +69,7 @@ void hostLog( int level, const char* message )
 static const LogSquirlPluginInfo kPluginInfo = {
     /* id          */ "io.github.logsquirl.serial",
     /* name        */ "Serial Monitor",
-    /* version     */ "0.4.0",
+    /* version     */ LOGSQUIRL_PLUGIN_VERSION,
     /* description */ "Stream serial port data into LogSquirl tabs",
     /* author      */ "LogSquirl Contributors",
     /* license     */ "GPL-3.0-or-later",
@@ -133,8 +133,8 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 
     // Add "Serial Monitor…" to the Plugins menu.  When clicked it opens
     // a non-modal dialog for port selection and session management.
-    api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026",
-                               &showSerialDialog, nullptr );
+    api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026", &showSerialDialog,
+                               nullptr );
 
     // Create the PortWidget early so the sidebar panel can reference it.
     serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
@@ -142,9 +142,8 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     // Register a sidebar tab for serial session management
     serial_monitor::g_state.sidebarWidget
         = new serial_monitor::SidebarWidget( serial_monitor::g_state.dialog );
-    api->register_sidebar_tab(
-        handle, "Serial",
-        static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
+    api->register_sidebar_tab( handle, "Serial",
+                               static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
 
     api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin ready." );
     return 0;
@@ -195,16 +194,14 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
     const auto currentBaud = settings.value( "serial/defaultBaud", 115200 ).toInt();
     const auto currentTimestamps = settings.value( "serial/timestamps", true ).toBool();
 
-    const auto prompt
-        = QString( "Default baud rate: %1\nTimestamps: %2\n\n"
-                   "Enter new default baud rate (leave empty to keep %1):" )
-              .arg( currentBaud )
-              .arg( currentTimestamps ? "enabled" : "disabled" );
+    const auto prompt = QString( "Default baud rate: %1\nTimestamps: %2\n\n"
+                                 "Enter new default baud rate (leave empty to keep %1):" )
+                            .arg( currentBaud )
+                            .arg( currentTimestamps ? "enabled" : "disabled" );
 
     bool ok = false;
-    const auto newBaud
-        = QInputDialog::getInt( parent, "Configure Serial Monitor",
-                                prompt, currentBaud, 300, 4000000, 1, &ok );
+    const auto newBaud = QInputDialog::getInt( parent, "Configure Serial Monitor", prompt,
+                                               currentBaud, 300, 4000000, 1, &ok );
 
     if ( ok ) {
         settings.setValue( "serial/defaultBaud", newBaud );

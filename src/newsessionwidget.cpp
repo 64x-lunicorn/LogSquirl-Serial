@@ -84,7 +84,7 @@ void NewSessionWidget::updateMenu()
 
     for ( const auto& portName : ports ) {
         auto* action = menu_->addAction( portName );
-        connect( action, &QAction::triggered, this, [portName]() {
+        connect( action, &QAction::triggered, this, [ portName ]() {
             if ( g_state.dialog ) {
                 g_state.dialog->rotateSession( portName );
             }

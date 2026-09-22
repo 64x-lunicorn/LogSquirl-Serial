@@ -52,17 +52,13 @@ namespace serial_monitor {
 
 // ── Construction / destruction ──────────────────────────────────────────
 
-SerialProcess::SerialProcess( const SerialConfig& config,
-                              const QString& savePath,
-                              QObject* parent )
+SerialProcess::SerialProcess( const SerialConfig& config, const QString& savePath, QObject* parent )
     : QObject( parent )
     , config_( config )
     , savePath_( savePath )
 {
-    connect( &port_, &QSerialPort::readyRead,
-             this, &SerialProcess::onReadyRead );
-    connect( &port_, &QSerialPort::errorOccurred,
-             this, &SerialProcess::onPortError );
+    connect( &port_, &QSerialPort::readyRead, this, &SerialProcess::onReadyRead );
+    connect( &port_, &QSerialPort::errorOccurred, this, &SerialProcess::onPortError );
 }
 
 SerialProcess::~SerialProcess()
@@ -153,12 +149,10 @@ void SerialProcess::start()
         }
 
         // Open the temporary file for writing
-        const auto tempPath
-            = tempDir_.path() + "/serial_" + config_.portName + ".log";
+        const auto tempPath = tempDir_.path() + "/serial_" + config_.portName + ".log";
         tempFile_.setFileName( tempPath );
         if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
-            Q_EMIT errorOccurred( "Failed to open temp file: "
-                                 + tempFile_.errorString() );
+            Q_EMIT errorOccurred( "Failed to open temp file: " + tempFile_.errorString() );
             return;
         }
         usingSavePath_ = false;
@@ -177,16 +171,15 @@ void SerialProcess::start()
 
     if ( !port_.open( QIODevice::ReadWrite ) ) {
         Q_EMIT errorOccurred(
-            QString( "Failed to open port %1: %2" )
-                .arg( config_.portName, port_.errorString() ) );
+            QString( "Failed to open port %1: %2" ).arg( config_.portName, port_.errorString() ) );
         tempFile_.close();
         return;
     }
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             qPrintable( QString( "Opened %1 at %2 baud" )
-                             .arg( config_.portName )
-                             .arg( config_.baudRate ) ) );
+    hostLog(
+        LOGSQUIRL_LOG_INFO,
+        qPrintable(
+            QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) ) );
     Q_EMIT started();
 }
 
@@ -226,10 +219,9 @@ void SerialProcess::stop()
         saveFile_.close();
     }
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             qPrintable( QString( "Closed %1 (%2 lines captured)" )
-                             .arg( config_.portName )
-                             .arg( lineCount_ ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( QString( "Closed %1 (%2 lines captured)" )
+                                                 .arg( config_.portName )
+                                                 .arg( lineCount_ ) ) );
     Q_EMIT finished();
 }
 
@@ -258,8 +250,7 @@ bool SerialProcess::sendData( const QByteArray& data )
     const auto written = port_.write( payload );
     if ( written < 0 ) {
         Q_EMIT errorOccurred(
-            QString( "Failed to write to %1: %2" )
-                .arg( config_.portName, port_.errorString() ) );
+            QString( "Failed to write to %1: %2" ).arg( config_.portName, port_.errorString() ) );
         return false;
     }
 
@@ -296,8 +287,7 @@ QString SerialProcess::rotateLog()
     // Flush any pending partial line to the old file before rotating
     if ( !readBuffer_.isEmpty() ) {
         if ( config_.timestamps ) {
-            const auto ts
-                = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
+            const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
             tempFile_.write( "[" + ts.toUtf8() + "] " );
         }
         tempFile_.write( readBuffer_ );
@@ -318,12 +308,10 @@ QString SerialProcess::rotateLog()
     QString newPath;
     if ( usingSavePath_ ) {
         const auto dir = QFileInfo( savePath_ ).absolutePath();
-        const auto timestamp
-            = QDateTime::currentDateTime().toString( "yyyy-MM-dd_HHmmss" );
+        const auto timestamp = QDateTime::currentDateTime().toString( "yyyy-MM-dd_HHmmss" );
         auto safeName = config_.portName;
         safeName.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
-        newPath = QDir( dir ).filePath(
-            QString( "%1_%2.log" ).arg( timestamp, safeName ) );
+        newPath = QDir( dir ).filePath( QString( "%1_%2.log" ).arg( timestamp, safeName ) );
     }
     else {
         newPath = tempDir_.path() + "/serial_" + config_.portName + "_"
@@ -332,15 +320,13 @@ QString SerialProcess::rotateLog()
     tempFile_.setFileName( newPath );
     if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
         hostLog( LOGSQUIRL_LOG_ERROR,
-                 qPrintable( "Failed to open rotated temp file: "
-                             + tempFile_.errorString() ) );
+                 qPrintable( "Failed to open rotated temp file: " + tempFile_.errorString() ) );
         return {};
     }
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             qPrintable( QString( "Rotated serial log for %1 (rotation #%2)" )
-                             .arg( config_.portName )
-                             .arg( rotationCount_ ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( QString( "Rotated serial log for %1 (rotation #%2)" )
+                                                 .arg( config_.portName )
+                                                 .arg( rotationCount_ ) ) );
 
     return newPath;
 }
@@ -369,8 +355,7 @@ void SerialProcess::onReadyRead()
 
             // Optionally prepend timestamp
             if ( config_.timestamps ) {
-                const auto ts
-                    = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
+                const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
                 const auto prefix = "[" + ts.toUtf8() + "] ";
                 tempFile_.write( prefix );
                 if ( saveFile_.isOpen() ) {
@@ -407,8 +392,8 @@ void SerialProcess::onPortError( QSerialPort::SerialPortError error )
         return;
     }
 
-    const auto msg = QString( "Serial port error on %1: %2" )
-                         .arg( config_.portName, port_.errorString() );
+    const auto msg
+        = QString( "Serial port error on %1: %2" ).arg( config_.portName, port_.errorString() );
     hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( msg ) );
     Q_EMIT errorOccurred( msg );
 }

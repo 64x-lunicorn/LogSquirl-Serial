@@ -63,10 +63,10 @@ namespace serial_monitor {
  */
 /// Line ending appended to transmitted data.
 enum class TxLineEnding {
-    None,  ///< No line ending appended.
-    CR,    ///< Carriage return (\r).
-    LF,    ///< Line feed (\n).
-    CRLF   ///< Carriage return + line feed (\r\n).
+    None, ///< No line ending appended.
+    CR,   ///< Carriage return (\r).
+    LF,   ///< Line feed (\n).
+    CRLF  ///< Carriage return + line feed (\r\n).
 };
 
 struct SerialConfig {
@@ -96,7 +96,7 @@ struct SerialConfig {
 class SerialProcess : public QObject {
     Q_OBJECT
 
-  public:
+public:
     /**
      * Construct a serial session.
      *
@@ -105,8 +105,7 @@ class SerialProcess : public QObject {
      *                  Pass an empty string to disable saving.
      * @param parent    QObject parent for memory management.
      */
-    explicit SerialProcess( const SerialConfig& config,
-                            const QString& savePath = {},
+    explicit SerialProcess( const SerialConfig& config, const QString& savePath = {},
                             QObject* parent = nullptr );
     ~SerialProcess() override;
 
@@ -185,13 +184,22 @@ class SerialProcess : public QObject {
     bool isRunning() const;
 
     /** The port name this session is attached to. */
-    const QString& portName() const { return config_.portName; }
+    const QString& portName() const
+    {
+        return config_.portName;
+    }
 
     /** Return the current configuration. */
-    const SerialConfig& config() const { return config_; }
+    const SerialConfig& config() const
+    {
+        return config_;
+    }
 
     /** Update the TX line ending for subsequent sendData() calls. */
-    void setTxLineEnding( TxLineEnding ending ) { config_.txLineEnding = ending; }
+    void setTxLineEnding( TxLineEnding ending )
+    {
+        config_.txLineEnding = ending;
+    }
 
     /**
      * Absolute path to the log file (save path or temp file).
@@ -204,12 +212,18 @@ class SerialProcess : public QObject {
     QString tempFilePath() const;
 
     /** Whether the session writes directly to a user-specified save path. */
-    bool isUsingSavePath() const { return usingSavePath_; }
+    bool isUsingSavePath() const
+    {
+        return usingSavePath_;
+    }
 
     /** Total number of lines captured so far. */
-    qint64 lineCount() const { return lineCount_; }
+    qint64 lineCount() const
+    {
+        return lineCount_;
+    }
 
-  Q_SIGNALS:
+Q_SIGNALS:
     /** Emitted when the serial port has been opened successfully. */
     void started();
 
@@ -222,14 +236,14 @@ class SerialProcess : public QObject {
     /** Emitted after data has been sent to the serial port. */
     void dataSent( const QByteArray& data );
 
-  private Q_SLOTS:
+private Q_SLOTS:
     /** Handle new data available on the serial port. */
     void onReadyRead();
 
     /** Handle serial port errors. */
     void onPortError( QSerialPort::SerialPortError error );
 
-  private:
+private:
     SerialConfig config_;
     QString savePath_;
 
@@ -237,9 +251,9 @@ class SerialProcess : public QObject {
     QTemporaryDir tempDir_;
     QFile tempFile_;
     QFile saveFile_;
-    QByteArray readBuffer_;  ///< Accumulates partial lines from the port.
+    QByteArray readBuffer_; ///< Accumulates partial lines from the port.
     qint64 lineCount_ = 0;
-    int rotationCount_ = 0;   ///< Incremented on each rotateLog() call.
+    int rotationCount_ = 0;      ///< Incremented on each rotateLog() call.
     bool usingSavePath_ = false; ///< True when writing directly to the log directory.
 };
 

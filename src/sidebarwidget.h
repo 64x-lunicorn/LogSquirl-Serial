@@ -61,7 +61,7 @@ class PortWidget;
 class SidebarWidget : public QWidget {
     Q_OBJECT
 
-  public:
+public:
     /**
      * Construct the sidebar panel.
      *
@@ -69,10 +69,9 @@ class SidebarWidget : public QWidget {
      *                    Must outlive this widget.
      * @param parent      QWidget parent.
      */
-    explicit SidebarWidget( PortWidget* portWidget,
-                            QWidget* parent = nullptr );
+    explicit SidebarWidget( PortWidget* portWidget, QWidget* parent = nullptr );
 
-  private Q_SLOTS:
+private Q_SLOTS:
     /** Re-scan for serial ports and update the combo box. */
     void refreshPorts();
 
@@ -91,7 +90,7 @@ class SidebarWidget : public QWidget {
     /** Send the contents of the send input to the active session. */
     void sendCommand();
 
-  private:
+private:
     /** Build or rebuild the sessions list widget contents. */
     void rebuildSessionList();
 
