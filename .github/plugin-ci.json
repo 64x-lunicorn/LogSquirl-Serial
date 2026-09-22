@@ -1,0 +1,5 @@
+{
+  "host_ref": "v26.07.0",
+  "qt_modules": ["qtserialport"],
+  "bundle_qt_frameworks": ["QtSerialPort"]
+}
