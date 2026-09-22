@@ -35,8 +35,8 @@
  */
 
 #include "sidebarwidget.h"
-#include "portwidget.h"
 #include "plugin.h"
+#include "portwidget.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -85,8 +85,8 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     settingsLayout->setContentsMargins( 6, 6, 6, 6 );
 
     baudCombo_ = new QComboBox( this );
-    const QList<int> baudRates = { 300, 1200, 2400, 4800, 9600, 19200,
-                                   38400, 57600, 115200, 230400, 460800, 921600 };
+    const QList<int> baudRates
+        = { 300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 };
     for ( const auto rate : baudRates ) {
         baudCombo_->addItem( QString::number( rate ), rate );
     }
@@ -126,8 +126,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
 
     timestampCheckBox_ = new QCheckBox( "Timestamps", this );
     timestampCheckBox_->setChecked( true );
-    timestampCheckBox_->setToolTip(
-        "Add [YYYY-MM-DD HH:mm:ss.zzz] prefix to each line" );
+    timestampCheckBox_->setToolTip( "Add [YYYY-MM-DD HH:mm:ss.zzz] prefix to each line" );
     settingsLayout->addRow( timestampCheckBox_ );
 
     mainLayout->addWidget( settingsGroup );
@@ -163,7 +162,8 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     auto* lineEndingLabel = new QLabel( "Line ending:", this );
     lineEndingRow->addWidget( lineEndingLabel );
     lineEndingCombo_ = new QComboBox( this );
-    lineEndingCombo_->addItem( "CRLF (\\r\\n)", static_cast<int>( serial_monitor::TxLineEnding::CRLF ) );
+    lineEndingCombo_->addItem( "CRLF (\\r\\n)",
+                               static_cast<int>( serial_monitor::TxLineEnding::CRLF ) );
     lineEndingCombo_->addItem( "LF (\\n)", static_cast<int>( serial_monitor::TxLineEnding::LF ) );
     lineEndingCombo_->addItem( "CR (\\r)", static_cast<int>( serial_monitor::TxLineEnding::CR ) );
     lineEndingCombo_->addItem( "None", static_cast<int>( serial_monitor::TxLineEnding::None ) );
@@ -180,9 +180,8 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
 
     logDirEdit_ = new QLineEdit( this );
     logDirEdit_->setPlaceholderText( "(logs saved to temp directory)" );
-    logDirEdit_->setToolTip(
-        "Directory where log files are saved.\n"
-        "Files are named: YYYY-MM-dd_HHmmss_<port>.log" );
+    logDirEdit_->setToolTip( "Directory where log files are saved.\n"
+                             "Files are named: YYYY-MM-dd_HHmmss_<port>.log" );
     logDirLayout->addWidget( logDirEdit_ );
 
     logDirBrowseButton_ = new QPushButton( "\u2026", this );
@@ -216,30 +215,22 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     mainLayout->addStretch();
 
     // ── Connections ──────────────────────────────────────────────────
-    connect( refreshButton_, &QPushButton::clicked,
-             this, &SidebarWidget::refreshPorts );
-    connect( startButton_, &QPushButton::clicked,
-             this, &SidebarWidget::startCapture );
-    connect( stopButton_, &QPushButton::clicked,
-             this, &SidebarWidget::stopSelectedCapture );
-    connect( stopAllButton_, &QPushButton::clicked,
-             this, &SidebarWidget::stopAllCaptures );
-    connect( sendButton_, &QPushButton::clicked,
-             this, &SidebarWidget::sendCommand );
-    connect( sendEdit_, &QLineEdit::returnPressed,
-             this, &SidebarWidget::sendCommand );
-    connect( logDirBrowseButton_, &QPushButton::clicked, this, [this]() {
-        const auto dir = QFileDialog::getExistingDirectory(
-            this, "Select Log Directory", logDirEdit_->text() );
+    connect( refreshButton_, &QPushButton::clicked, this, &SidebarWidget::refreshPorts );
+    connect( startButton_, &QPushButton::clicked, this, &SidebarWidget::startCapture );
+    connect( stopButton_, &QPushButton::clicked, this, &SidebarWidget::stopSelectedCapture );
+    connect( stopAllButton_, &QPushButton::clicked, this, &SidebarWidget::stopAllCaptures );
+    connect( sendButton_, &QPushButton::clicked, this, &SidebarWidget::sendCommand );
+    connect( sendEdit_, &QLineEdit::returnPressed, this, &SidebarWidget::sendCommand );
+    connect( logDirBrowseButton_, &QPushButton::clicked, this, [ this ]() {
+        const auto dir = QFileDialog::getExistingDirectory( this, "Select Log Directory",
+                                                            logDirEdit_->text() );
         if ( !dir.isEmpty() ) {
             logDirEdit_->setText( dir );
             saveLogDir();
         }
     } );
-    connect( logDirEdit_, &QLineEdit::editingFinished,
-             this, &SidebarWidget::saveLogDir );
-    connect( portCombo_, &QComboBox::currentIndexChanged,
-             this, [this]() { updateUiState(); } );
+    connect( logDirEdit_, &QLineEdit::editingFinished, this, &SidebarWidget::saveLogDir );
+    connect( portCombo_, &QComboBox::currentIndexChanged, this, [ this ]() { updateUiState(); } );
 
     // Load defaults from config
     const auto defaults = SerialProcess::defaultConfig();
@@ -252,8 +243,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     // Periodic refresh of line counts (every 1 second)
     refreshTimer_ = new QTimer( this );
     refreshTimer_->setInterval( 1000 );
-    connect( refreshTimer_, &QTimer::timeout,
-             this, &SidebarWidget::refreshSessionList );
+    connect( refreshTimer_, &QTimer::timeout, this, &SidebarWidget::refreshSessionList );
     refreshTimer_->start();
 
     // Initial populate
@@ -324,8 +314,7 @@ void SidebarWidget::stopAllCaptures()
     portWidget_->stopAll();
 
     if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification( g_state.handle,
-                                        "All serial sessions stopped." );
+        g_state.api->show_notification( g_state.handle, "All serial sessions stopped." );
     }
 
     refreshPorts();
@@ -346,13 +335,13 @@ void SidebarWidget::sendCommand()
             return;
         }
         const auto target = active.first();
-        const auto lineEnding = static_cast<TxLineEnding>(
-            lineEndingCombo_->currentData().toInt() );
+        const auto lineEnding
+            = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
         portWidget_->sendToSession( target, text.toUtf8(), lineEnding );
     }
     else {
-        const auto lineEnding = static_cast<TxLineEnding>(
-            lineEndingCombo_->currentData().toInt() );
+        const auto lineEnding
+            = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
         portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
     }
 
@@ -402,17 +391,15 @@ void SidebarWidget::rebuildSessionList()
         stopBtn->setToolTip( "Stop this session" );
         rowLayout->addWidget( stopBtn );
 
-        connect( rotateBtn, &QPushButton::clicked, this,
-                 [this, portName]() {
-                     portWidget_->rotateSession( portName );
-                     refreshPorts();
-                 } );
+        connect( rotateBtn, &QPushButton::clicked, this, [ this, portName ]() {
+            portWidget_->rotateSession( portName );
+            refreshPorts();
+        } );
 
-        connect( stopBtn, &QPushButton::clicked, this,
-                 [this, portName]() {
-                     portWidget_->stopSession( portName );
-                     refreshPorts();
-                 } );
+        connect( stopBtn, &QPushButton::clicked, this, [ this, portName ]() {
+            portWidget_->stopSession( portName );
+            refreshPorts();
+        } );
 
         item->setSizeHint( row->sizeHint() );
         sessionList_->setItemWidget( item, row );
@@ -430,17 +417,13 @@ SerialConfig SidebarWidget::buildConfig() const
     SerialConfig config;
     config.portName = currentPortName();
     config.baudRate = baudCombo_->currentData().toInt();
-    config.dataBits = static_cast<QSerialPort::DataBits>(
-        dataBitsCombo_->currentData().toInt() );
-    config.stopBits = static_cast<QSerialPort::StopBits>(
-        stopBitsCombo_->currentData().toInt() );
-    config.parity = static_cast<QSerialPort::Parity>(
-        parityCombo_->currentData().toInt() );
-    config.flowControl = static_cast<QSerialPort::FlowControl>(
-        flowControlCombo_->currentData().toInt() );
+    config.dataBits = static_cast<QSerialPort::DataBits>( dataBitsCombo_->currentData().toInt() );
+    config.stopBits = static_cast<QSerialPort::StopBits>( stopBitsCombo_->currentData().toInt() );
+    config.parity = static_cast<QSerialPort::Parity>( parityCombo_->currentData().toInt() );
+    config.flowControl
+        = static_cast<QSerialPort::FlowControl>( flowControlCombo_->currentData().toInt() );
     config.timestamps = timestampCheckBox_->isChecked();
-    config.txLineEnding = static_cast<TxLineEnding>(
-        lineEndingCombo_->currentData().toInt() );
+    config.txLineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
     return config;
 }
 
@@ -466,8 +449,7 @@ void SidebarWidget::updateUiState()
         statusLabel_->setText( {} );
     }
     else {
-        statusLabel_->setText(
-            QString( "%1 active session(s)" ).arg( activeCount ) );
+        statusLabel_->setText( QString( "%1 active session(s)" ).arg( activeCount ) );
     }
 }
 
@@ -491,8 +473,7 @@ QString SidebarWidget::generateSavePath( const QString& portName ) const
     // Sanitise the port name for use as a filename component
     auto safeName = portName;
     safeName.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
-    return QDir( dir ).filePath(
-        QString( "%1_%2.log" ).arg( timestamp, safeName ) );
+    return QDir( dir ).filePath( QString( "%1_%2.log" ).arg( timestamp, safeName ) );
 }
 
 void SidebarWidget::loadLogDir()

@@ -27,8 +27,8 @@
 
 #include <catch2/catch.hpp>
 
-#include "serialprocess.h"
 #include "plugin.h"
+#include "serialprocess.h"
 
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;

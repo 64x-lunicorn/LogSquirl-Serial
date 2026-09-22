@@ -68,7 +68,7 @@ namespace serial_monitor {
 class PortWidget : public QDialog {
     Q_OBJECT
 
-  public:
+public:
     explicit PortWidget( QWidget* parent = nullptr );
     ~PortWidget() override = default;
 
@@ -130,11 +130,9 @@ class PortWidget : public QDialog {
      * @param lineEnding   Line ending to append before transmission.
      * @return true if sent successfully, false otherwise.
      */
-    bool sendToSession( const QString& portName,
-                        const QByteArray& data,
-                        TxLineEnding lineEnding );
+    bool sendToSession( const QString& portName, const QByteArray& data, TxLineEnding lineEnding );
 
-  private Q_SLOTS:
+private Q_SLOTS:
     /** Re-scan for serial ports and update the combo box. */
     void refreshPorts();
 
@@ -159,7 +157,7 @@ class PortWidget : public QDialog {
     /** Handle a session error. */
     void onSessionError( const QString& portName, const QString& message );
 
-  private:
+private:
     /** Update UI state (button enable/disable, status label). */
     void updateUiState();
 
