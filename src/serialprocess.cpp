@@ -122,23 +122,32 @@ QStringList SerialProcess::filterPorts( const QList<QSerialPortInfo>& ports )
     return result;
 }
 
-QList<QByteArray> SerialProcess::takeLines( QByteArray& buffer, qsizetype maxLineLength )
+QList<QByteArray> SerialProcess::takeLines( QByteArray& buffer, bool& afterCr,
+                                            qsizetype maxLineLength )
 {
     QList<QByteArray> lines;
     qsizetype start = 0;
-    for ( qsizetype i = 0; i < buffer.size(); ++i ) {
+    // The CR that ended the previous data may be the first half of a CRLF
+    // whose LF arrives only now.  Its line has been taken already.
+    if ( afterCr && buffer.startsWith( '\n' ) ) {
+        start = 1;
+    }
+    if ( !buffer.isEmpty() ) {
+        afterCr = false;
+    }
+    for ( qsizetype i = start; i < buffer.size(); ++i ) {
         const auto c = buffer.at( i );
         if ( c != '\n' && c != '\r' ) {
             continue;
         }
-        // A CR at the end of the data may be the first half of a CRLF:
-        // wait for the next byte rather than emit a spurious empty line.
-        if ( c == '\r' && i + 1 == buffer.size() ) {
-            break;
-        }
         lines.append( buffer.mid( start, i - start ) );
-        if ( c == '\r' && buffer.at( i + 1 ) == '\n' ) {
-            ++i;
+        if ( c == '\r' ) {
+            if ( i + 1 == buffer.size() ) {
+                afterCr = true;
+            }
+            else if ( buffer.at( i + 1 ) == '\n' ) {
+                ++i;
+            }
         }
         start = i + 1;
     }
@@ -221,6 +230,7 @@ bool SerialProcess::start()
 
     lineCount_ = 0;
     readBuffer_.clear();
+    readAfterCr_ = false;
     deviceLost_ = false;
 
     // Configure the serial port
@@ -404,9 +414,6 @@ void SerialProcess::flushPartialLine()
         return;
     }
 
-    if ( readBuffer_.endsWith( '\r' ) ) {
-        readBuffer_.chop( 1 );
-    }
     writeLine( readBuffer_ );
     tempFile_.flush();
     readBuffer_.clear();
@@ -418,7 +425,7 @@ void SerialProcess::onReadyRead()
 {
     readBuffer_.append( port_.readAll() );
 
-    const auto lines = takeLines( readBuffer_ );
+    const auto lines = takeLines( readBuffer_, readAfterCr_ );
     for ( const auto& line : lines ) {
         writeLine( line );
     }

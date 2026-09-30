@@ -141,7 +141,10 @@ public:
     /**
      * Remove every complete line from the front of @p buffer and return
      * the lines, without their terminator.  "\n", "\r\n" and a lone "\r"
-     * all end a line.  An incomplete last line stays in the buffer until
+     * all end a line.  A CR ends its line at once, even as the last byte
+     * read, and sets @p afterCr: an LF at the start of the next call is
+     * then the second half of a CRLF pair and is skipped.  An incomplete
+     * last line stays in the buffer until
      * more data arrives, unless it is longer than @p maxLineLength: then
      * it is returned as a line of its own, so that a stream that never
      * ends its lines (binary data, a progress display) cannot make the
@@ -151,10 +154,13 @@ public:
      * splitting without real hardware.
      *
      * @param buffer         Bytes read so far; complete lines are removed.
+     * @param afterCr        In: whether the data before @p buffer ended with
+     *                       a CR.  Out: whether @p buffer did.  Start with
+     *                       false and keep it for the next call.
      * @param maxLineLength  Size above which an incomplete line is forced out.
      * @return The complete lines, in order.
      */
-    static QList<QByteArray> takeLines( QByteArray& buffer,
+    static QList<QByteArray> takeLines( QByteArray& buffer, bool& afterCr,
                                         qsizetype maxLineLength = kMaxLineLength );
 
     /**
@@ -318,7 +324,8 @@ private:
     QSerialPort port_;
     QTemporaryDir tempDir_;
     QFile tempFile_;
-    QByteArray readBuffer_; ///< Accumulates partial lines from the port.
+    QByteArray readBuffer_;    ///< Accumulates partial lines from the port.
+    bool readAfterCr_ = false; ///< Whether the data read so far ended with a CR.
     qint64 lineCount_ = 0;
     int rotationCount_ = 0;       ///< Incremented on each rotateLog() call.
     bool usingSavePath_ = false;  ///< True when writing directly to the log directory.

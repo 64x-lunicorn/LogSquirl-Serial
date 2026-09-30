@@ -282,6 +282,38 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         }
     }
 
+    GIVEN( "a device that ends its lines with a lone CR" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+
+        WHEN( "it sends a line and then goes quiet" )
+        {
+            REQUIRE( proc.start() );
+            REQUIRE( device.send( "first\r" ) );
+
+            THEN( "the line is written right away, not when the next one arrives" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+                REQUIRE( readFile( proc.tempFilePath() ) == "first\n" );
+            }
+
+            AND_WHEN( "the LF of a CRLF pair follows in a later read" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+                REQUIRE( device.send( "\nsecond\n" ) );
+
+                THEN( "it does not add an empty line" )
+                {
+                    REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
+                    REQUIRE( readFile( proc.tempFilePath() ) == "first\nsecond\n" );
+                }
+            }
+        }
+    }
+
     GIVEN( "a device and a save path that already holds a capture" )
     {
         FakeHost host;

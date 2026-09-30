@@ -25,6 +25,11 @@
  * Devices end lines with "\n", "\r\n" or a lone "\r", and some never end
  * them at all (binary data, or a progress display that redraws with "\r"),
  * so the read buffer must not grow without bound.
+ *
+ * A CR ends its line at once, even when it is the last byte read: a
+ * device that ends lines with a lone CR must not see each line appear one
+ * line late.  afterCr remembers it, so that an LF at the start of the
+ * next read is taken as the second half of a CRLF pair.
  */
 
 #include <catch2/catch.hpp>
@@ -40,10 +45,11 @@ SCENARIO( "takeLines splits complete lines off the read buffer", "[takelines]" )
     GIVEN( "a buffer with LF-terminated lines and a partial last line" )
     {
         QByteArray buffer = "first\nsecond\nthird";
+        bool afterCr = false;
 
         WHEN( "taking lines" )
         {
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
             THEN( "the complete lines are returned without their terminator" )
             {
@@ -60,10 +66,11 @@ SCENARIO( "takeLines splits complete lines off the read buffer", "[takelines]" )
     GIVEN( "a buffer with CRLF-terminated lines" )
     {
         QByteArray buffer = "first\r\nsecond\r\n";
+        bool afterCr = false;
 
         WHEN( "taking lines" )
         {
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
             THEN( "each CRLF ends exactly one line" )
             {
@@ -76,10 +83,11 @@ SCENARIO( "takeLines splits complete lines off the read buffer", "[takelines]" )
     GIVEN( "a buffer with CR-only line endings" )
     {
         QByteArray buffer = "first\rsecond\rthird";
+        bool afterCr = false;
 
         WHEN( "taking lines" )
         {
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
             THEN( "a lone CR ends a line too" )
             {
@@ -92,33 +100,33 @@ SCENARIO( "takeLines splits complete lines off the read buffer", "[takelines]" )
     GIVEN( "a CRLF terminator split across two reads" )
     {
         QByteArray buffer = "first\r";
+        bool afterCr = false;
 
         WHEN( "taking lines before and after the LF arrives" )
         {
-            const auto before = SerialProcess::takeLines( buffer );
+            const auto before = SerialProcess::takeLines( buffer, afterCr );
             buffer.append( "\nsecond" );
-            const auto after = SerialProcess::takeLines( buffer );
+            const auto after = SerialProcess::takeLines( buffer, afterCr );
 
-            THEN( "the CR waits for the next byte and no empty line appears" )
+            THEN( "the CR ends the line at once, and the LF adds no empty line" )
             {
-                REQUIRE( before.isEmpty() );
-                REQUIRE( after == Lines{ "first" } );
+                REQUIRE( before == Lines{ "first" } );
+                REQUIRE( after.isEmpty() );
                 REQUIRE( buffer == "second" );
             }
         }
     }
 
-    GIVEN( "a CR at the end of a read followed by a new line's data" )
+    GIVEN( "a device that ends its lines with a lone CR, then goes quiet" )
     {
-        QByteArray buffer = "first\r";
+        QByteArray buffer = "first\rsecond\r";
+        bool afterCr = false;
 
-        WHEN( "the next read does not start with LF" )
+        WHEN( "taking lines" )
         {
-            SerialProcess::takeLines( buffer );
-            buffer.append( "second\r\n" );
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
-            THEN( "the CR ended the first line" )
+            THEN( "the last line is not held back waiting for more data" )
             {
                 REQUIRE( lines == Lines{ "first", "second" } );
                 REQUIRE( buffer.isEmpty() );
@@ -126,13 +134,72 @@ SCENARIO( "takeLines splits complete lines off the read buffer", "[takelines]" )
         }
     }
 
+    GIVEN( "a CR at the end of a read followed by a new line's data" )
+    {
+        QByteArray buffer = "first\r";
+        bool afterCr = false;
+
+        WHEN( "the next read does not start with LF" )
+        {
+            const auto before = SerialProcess::takeLines( buffer, afterCr );
+            buffer.append( "second\r\n" );
+            const auto after = SerialProcess::takeLines( buffer, afterCr );
+
+            THEN( "the CR ended the first line, and the second line is complete" )
+            {
+                REQUIRE( before == Lines{ "first" } );
+                REQUIRE( after == Lines{ "second" } );
+                REQUIRE( buffer.isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a CR at the end of a read followed by an empty line" )
+    {
+        QByteArray buffer = "first\r";
+        bool afterCr = false;
+
+        WHEN( "the next read brings a CRLF pair and then another LF" )
+        {
+            SerialProcess::takeLines( buffer, afterCr );
+            buffer.append( "\n\n" );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
+
+            THEN( "only the LF that completes the CRLF pair is skipped" )
+            {
+                REQUIRE( lines == Lines{ "" } );
+                REQUIRE( buffer.isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a CR at the end of a read, and an empty read after it" )
+    {
+        QByteArray buffer = "first\r";
+        bool afterCr = false;
+
+        WHEN( "the LF arrives only in the read after the empty one" )
+        {
+            SerialProcess::takeLines( buffer, afterCr );
+            SerialProcess::takeLines( buffer, afterCr );
+            buffer.append( "\nsecond\n" );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
+
+            THEN( "the LF still completes the CRLF pair" )
+            {
+                REQUIRE( lines == Lines{ "second" } );
+            }
+        }
+    }
+
     GIVEN( "a buffer with empty lines in every line ending style" )
     {
         QByteArray buffer = "\n\r\n\r\r\n";
+        bool afterCr = false;
 
         WHEN( "taking lines" )
         {
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
             THEN( "each empty line is kept" )
             {
@@ -144,10 +211,11 @@ SCENARIO( "takeLines splits complete lines off the read buffer", "[takelines]" )
     GIVEN( "a buffer without any line terminator" )
     {
         QByteArray buffer = "partial";
+        bool afterCr = false;
 
         WHEN( "taking lines" )
         {
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
             THEN( "nothing is taken" )
             {
@@ -163,10 +231,11 @@ SCENARIO( "takeLines caps an unterminated line", "[takelines]" )
     GIVEN( "more unterminated data than the maximum line length" )
     {
         QByteArray buffer = "done\n0123456789";
+        bool afterCr = false;
 
         WHEN( "taking lines with a maximum line length of 8" )
         {
-            const auto lines = SerialProcess::takeLines( buffer, 8 );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr, 8 );
 
             THEN( "the unterminated data is forced out as a line of its own" )
             {
@@ -179,10 +248,11 @@ SCENARIO( "takeLines caps an unterminated line", "[takelines]" )
     GIVEN( "unterminated data within the maximum line length" )
     {
         QByteArray buffer = "01234567";
+        bool afterCr = false;
 
         WHEN( "taking lines with a maximum line length of 8" )
         {
-            const auto lines = SerialProcess::takeLines( buffer, 8 );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr, 8 );
 
             THEN( "the data keeps waiting for its terminator" )
             {
@@ -195,10 +265,11 @@ SCENARIO( "takeLines caps an unterminated line", "[takelines]" )
     GIVEN( "a binary stream without line endings" )
     {
         QByteArray buffer( SerialProcess::kMaxLineLength + 1, '\x01' );
+        bool afterCr = false;
 
         WHEN( "taking lines with the default maximum" )
         {
-            const auto lines = SerialProcess::takeLines( buffer );
+            const auto lines = SerialProcess::takeLines( buffer, afterCr );
 
             THEN( "the buffer is emptied instead of growing" )
             {
