@@ -34,6 +34,7 @@
 #include "sidebarwidget.h"
 
 #include <QComboBox>
+#include <QLocale>
 #include <QSettings>
 
 #include <algorithm>
@@ -147,6 +148,42 @@ SCENARIO( "a baud rate combo accepts rates outside the standard list", "[baudrat
                 REQUIRE( combo.validator()->validate( text, pos ) == QValidator::Invalid );
                 text = "-9600";
                 REQUIRE( combo.validator()->validate( text, pos ) == QValidator::Invalid );
+            }
+        }
+    }
+}
+
+SCENARIO( "a baud rate combo reads numbers the same way in every locale", "[baudrate]" )
+{
+    GIVEN( "a baud rate combo set up while the locale is German" )
+    {
+        const auto previousLocale = QLocale();
+        QLocale::setDefault( QLocale( QLocale::German, QLocale::Germany ) );
+        QComboBox combo;
+        initBaudRateCombo( &combo );
+        QLocale::setDefault( previousLocale );
+
+        WHEN( "typing a rate with a group separator" )
+        {
+            THEN( "the validator refuses it, since it would not be read as a rate" )
+            {
+                int pos = 0;
+                QString text = "250.000";
+                REQUIRE( combo.validator()->validate( text, pos ) == QValidator::Invalid );
+                text = "250,000";
+                REQUIRE( combo.validator()->validate( text, pos ) == QValidator::Invalid );
+            }
+        }
+
+        WHEN( "typing a plain rate" )
+        {
+            THEN( "the validator accepts it and it is read as typed" )
+            {
+                int pos = 0;
+                QString text = "250000";
+                REQUIRE( combo.validator()->validate( text, pos ) == QValidator::Acceptable );
+                combo.setEditText( text );
+                REQUIRE( baudRateFrom( &combo ) == 250000 );
             }
         }
     }

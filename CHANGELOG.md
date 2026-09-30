@@ -34,8 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Serial panels right away.
 - A default baud rate set in Plugins → Configure that is not one of the
   listed rates (e.g. 250000) was silently ignored. It is now added to the
-  list and selected. The baud rate boxes also accept any typed positive
-  rate, and a session with an invalid rate is refused with a message.
+  list and selected. The baud rate boxes also accept any positive rate
+  typed as plain digits (in every locale, so "250.000" is not mistaken
+  for a rate), and a session with an invalid rate is refused with a message.
 - The Serial Monitor dialog (Plugins menu) stays on top of LogSquirl's
   window, and no longer keeps LogSquirl running when it is open while the
   main window is closed.

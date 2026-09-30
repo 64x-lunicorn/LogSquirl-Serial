@@ -22,6 +22,7 @@
 #include <QComboBox>
 #include <QIntValidator>
 #include <QList>
+#include <QLocale>
 
 #include <limits>
 
@@ -40,7 +41,15 @@ void initBaudRateCombo( QComboBox* combo )
     // the list, so it stays sorted and free of typos.
     combo->setEditable( true );
     combo->setInsertPolicy( QComboBox::NoInsert );
-    combo->setValidator( new QIntValidator( 1, std::numeric_limits<int>::max(), combo ) );
+    //
+    // The validator must accept exactly what baudRateFrom() can read: plain
+    // digits.  In the user's locale it would also accept "250.000" (German
+    // grouping), which reads as no rate at all.
+    auto* validator = new QIntValidator( 1, std::numeric_limits<int>::max(), combo );
+    auto digitsOnly = QLocale::c();
+    digitsOnly.setNumberOptions( QLocale::RejectGroupSeparator );
+    validator->setLocale( digitsOnly );
+    combo->setValidator( validator );
 
     selectBaudRate( combo, 115200 );
 }
