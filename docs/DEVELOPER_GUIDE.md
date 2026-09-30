@@ -82,7 +82,6 @@ classDiagram
         -QSerialPort port_
         -QTemporaryDir tempDir_
         -QFile tempFile_
-        -QFile saveFile_
         -QByteArray readBuffer_
         -qint64 lineCount_
         +start()

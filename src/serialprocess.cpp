@@ -196,28 +196,16 @@ void SerialProcess::stop()
         if ( config_.timestamps ) {
             const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
             tempFile_.write( "[" + ts.toUtf8() + "] " );
-            if ( saveFile_.isOpen() ) {
-                saveFile_.write( "[" + ts.toUtf8() + "] " );
-            }
         }
         tempFile_.write( readBuffer_ );
         tempFile_.write( "\n", 1 );
         tempFile_.flush();
-
-        if ( saveFile_.isOpen() ) {
-            saveFile_.write( readBuffer_ );
-            saveFile_.write( "\n", 1 );
-            saveFile_.flush();
-        }
 
         ++lineCount_;
         readBuffer_.clear();
     }
 
     tempFile_.close();
-    if ( saveFile_.isOpen() ) {
-        saveFile_.close();
-    }
 
     hostLog( LOGSQUIRL_LOG_INFO, qPrintable( QString( "Closed %1 (%2 lines captured)" )
                                                  .arg( config_.portName )
@@ -358,22 +346,12 @@ void SerialProcess::onReadyRead()
                 const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
                 const auto prefix = "[" + ts.toUtf8() + "] ";
                 tempFile_.write( prefix );
-                if ( saveFile_.isOpen() ) {
-                    saveFile_.write( prefix );
-                }
             }
 
             // Write line data to temp file
             tempFile_.write( lineData );
             tempFile_.write( "\n", 1 );
             tempFile_.flush();
-
-            // Write to save file if open
-            if ( saveFile_.isOpen() ) {
-                saveFile_.write( lineData );
-                saveFile_.write( "\n", 1 );
-                saveFile_.flush();
-            }
 
             ++lineCount_;
         }

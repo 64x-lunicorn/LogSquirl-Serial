@@ -250,7 +250,6 @@ private:
     QSerialPort port_;
     QTemporaryDir tempDir_;
     QFile tempFile_;
-    QFile saveFile_;
     QByteArray readBuffer_; ///< Accumulates partial lines from the port.
     qint64 lineCount_ = 0;
     int rotationCount_ = 0;      ///< Incremented on each rotateLog() call.
