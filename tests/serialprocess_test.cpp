@@ -32,6 +32,7 @@
 #include "fakehost.h"
 #include "plugin.h"
 #include "pseudoterminal.h"
+#include "readonlydir.h"
 #include "serialprocess.h"
 
 #include <QFile>
@@ -41,6 +42,7 @@
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;
 using serial_test::FakeHost;
+using serial_test::ReadOnlyDir;
 using serial_test::waitFor;
 
 namespace {
@@ -48,31 +50,13 @@ namespace {
 /// A port name that exists on no system.
 const QString kMissingPort = "logsquirl-test-no-such-port";
 
+#ifdef Q_OS_UNIX
 QByteArray readFile( const QString& path )
 {
     QFile file( path );
     return file.open( QIODevice::ReadOnly ) ? file.readAll() : QByteArray();
 }
-
-/// Makes a directory read-only for its lifetime, so no file can be created in it.
-class ReadOnlyDir {
-public:
-    explicit ReadOnlyDir( const QString& path )
-        : path_( path )
-        , permissions_( QFile::permissions( path ) )
-    {
-        QFile::setPermissions( path_, QFileDevice::ReadOwner | QFileDevice::ExeOwner );
-    }
-
-    ~ReadOnlyDir()
-    {
-        QFile::setPermissions( path_, permissions_ );
-    }
-
-private:
-    QString path_;
-    QFileDevice::Permissions permissions_;
-};
+#endif
 
 SerialConfig configFor( const QString& portName )
 {
@@ -194,42 +178,23 @@ SCENARIO( "configDir falls back to temp when plugin is not initialised", "[seria
     }
 }
 
-SCENARIO( "rotateLog creates a new temp file and preserves the old one", "[serialprocess]" )
+SCENARIO( "rotateLog does nothing while no session runs", "[serialprocess]" )
 {
-    GIVEN( "a SerialProcess that is not running" )
+    GIVEN( "a SerialProcess that has not been started" )
     {
         SerialConfig cfg;
         cfg.portName = "/dev/ttyUSB0";
         SerialProcess proc( cfg );
 
-        WHEN( "rotateLog is called without starting the process" )
+        WHEN( "rotateLog is called" )
         {
             const auto result = proc.rotateLog();
 
-            THEN( "it returns an empty string because the port is not open" )
+            THEN( "it returns an empty path and the line count stays at 0" )
             {
                 REQUIRE( result.isEmpty() );
+                REQUIRE( proc.lineCount() == 0 );
             }
-        }
-    }
-
-    GIVEN( "a SerialProcess whose temp file has been manually set up for testing" )
-    {
-        // We cannot call start() without real hardware, but we can verify that
-        // rotateLog returns empty when not running (port not open = no rotation).
-        SerialConfig cfg;
-        cfg.portName = "rotate-test-port";
-        SerialProcess proc( cfg );
-
-        THEN( "rotateLog returns empty because no port is open" )
-        {
-            REQUIRE( proc.rotateLog().isEmpty() );
-        }
-
-        THEN( "the line count stays at 0 after a failed rotation" )
-        {
-            proc.rotateLog();
-            REQUIRE( proc.lineCount() == 0 );
         }
     }
 }
@@ -438,6 +403,11 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
 
     GIVEN( "a running session whose log directory no longer accepts new files" )
     {
+        if ( !ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
         FakeHost host;
         serial_test::PseudoTerminal device;
         QTemporaryDir logDir;

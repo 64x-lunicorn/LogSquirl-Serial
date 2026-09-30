@@ -32,6 +32,7 @@
 #include "fakehost.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
+#include "readonlydir.h"
 
 #include <QDir>
 #include <QFile>
@@ -151,6 +152,11 @@ SCENARIO( "a failed rotation is reported once", "[portwidget]" )
 {
     GIVEN( "a session whose log directory no longer accepts new files" )
     {
+        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
         FakeHost host;
         serial_test::PseudoTerminal device;
         PortWidget widget;
@@ -162,10 +168,10 @@ SCENARIO( "a failed rotation is reported once", "[portwidget]" )
 
         WHEN( "rotating the session" )
         {
-            const auto permissions = QFile::permissions( logDir.path() );
-            QFile::setPermissions( logDir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner );
-            widget.rotateSession( device.devicePath() );
-            QFile::setPermissions( logDir.path(), permissions );
+            {
+                const serial_test::ReadOnlyDir readOnly( logDir.path() );
+                widget.rotateSession( device.devicePath() );
+            }
 
             THEN( "the user is told once, no tab is opened, and the session goes on" )
             {
