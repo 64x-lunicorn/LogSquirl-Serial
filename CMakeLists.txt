@@ -75,10 +75,10 @@ target_link_libraries(logsquirl_serial
 
 # ── macOS rpath ───────────────────────────────────────────────────────────
 # When loaded from Contents/PlugIns/<id>/, the plugin resolves Qt frameworks
-# via @loader_path/../../../Frameworks (→ Contents/Frameworks/).
+# via @loader_path/../../Frameworks (→ Contents/Frameworks/).
 if(APPLE)
     set_target_properties(logsquirl_serial PROPERTIES
-        INSTALL_RPATH "@loader_path;@loader_path/../../../Frameworks"
+        INSTALL_RPATH "@loader_path;@loader_path/../../Frameworks"
     )
 endif()
 
