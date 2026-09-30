@@ -134,7 +134,8 @@ to enumerate ports.  The `filterPorts()` method excludes:
 
 When a session starts:
 
-1. A `QTemporaryDir` is created for this session
+1. A `QTemporaryDir` is created for this session, named after the process:
+   `logsquirl-serial-<pid>-XXXXXX` (`src/tempdirs.h`)
 2. A temp file is opened inside it: `serial_<portName>.log`
 3. `QSerialPort` is configured and opened in `ReadOnly` mode
 4. The `readyRead` signal triggers `onReadyRead()`:
@@ -163,6 +164,13 @@ When the user clicks Stop:
 2. `stop()` closes the serial port and flushes remaining data
 3. The `SerialProcess` is deleted, but the temp file remains on disk
 4. The LogSquirl tab continues to display all captured data
+
+The file stays until LogSquirl quits, also when the plugin is disabled or
+updated at runtime, since its tabs stay open. A plugin instance loaded later
+knows nothing of the files of the one before, but the process ID in the
+directory name does: when LogSquirl quits, the plugin removes every directory
+with its own process ID, and at `init()` those whose process no longer runs,
+e.g. after a crash.
 
 ## Building Your Own Plugin
 

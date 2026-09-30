@@ -40,6 +40,7 @@
 
 #include "serialprocess.h"
 #include "plugin.h"
+#include "tempdirs.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -68,6 +69,7 @@ SerialProcess::SerialProcess( const SerialConfig& config, const QString& savePat
     : QObject( parent )
     , config_( config )
     , savePath_( savePath )
+    , tempDir_( tempDirTemplate( tempRoot() ) )
 {
     connect( &port_, &QSerialPort::readyRead, this, &SerialProcess::onReadyRead );
     connect( &port_, &QSerialPort::errorOccurred, this, &SerialProcess::onPortError );
@@ -323,11 +325,6 @@ QString SerialProcess::preserveTempFile()
     }
     tempDir_.setAutoRemove( false );
     return tempDir_.path();
-}
-
-void SerialProcess::removeTempFiles()
-{
-    tempDir_.remove();
 }
 
 QString SerialProcess::rotateLog()
