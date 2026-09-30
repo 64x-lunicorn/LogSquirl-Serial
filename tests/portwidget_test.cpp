@@ -101,7 +101,6 @@ SCENARIO( "a session is only accepted when its port opens", "[portwidget]" )
 
             THEN( "the session is accepted and its file opened in a tab" )
             {
-                INFO( host.notifications.join( '\n' ).toStdString() );
                 REQUIRE( started );
                 REQUIRE( widget.isSessionActive( device.devicePath() ) );
                 REQUIRE( host.openedFiles.size() == 1 );
@@ -112,3 +111,35 @@ SCENARIO( "a session is only accepted when its port opens", "[portwidget]" )
     }
 #endif
 }
+
+#ifdef Q_OS_UNIX
+SCENARIO( "two sessions never write to the same file", "[portwidget]" )
+{
+    GIVEN( "a session writing to a save path" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal firstDevice;
+        serial_test::PseudoTerminal secondDevice;
+        PortWidget widget;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        REQUIRE( widget.startSession( configFor( firstDevice.devicePath() ), savePath ) );
+        host.notifications.clear();
+
+        WHEN( "starting a second port with the same save path" )
+        {
+            const auto started
+                = widget.startSession( configFor( secondDevice.devicePath() ), savePath );
+
+            THEN( "the second session is refused, and the user told why" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE_FALSE( widget.isSessionActive( secondDevice.devicePath() ) );
+                REQUIRE( host.notifications.size() == 1 );
+            }
+        }
+
+        widget.stopAll();
+    }
+}
+#endif

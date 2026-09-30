@@ -253,9 +253,8 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
 
-        SerialProcess proc( configFor( device.devicePath() ), logDir.filePath( "capture.log" ) );
+        SerialProcess proc( configFor( device.devicePath() ) );
 
         WHEN( "starting the session" )
         {
@@ -271,5 +270,124 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
             }
         }
     }
+
+    GIVEN( "a device and a save path that already holds a capture" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        {
+            QFile existing( savePath );
+            REQUIRE( existing.open( QIODevice::WriteOnly ) );
+            existing.write( "earlier capture\n" );
+        }
+
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+
+        WHEN( "the session runs" )
+        {
+            REQUIRE( proc.start() );
+            REQUIRE( device.send( "first\n" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+
+            THEN( "the new output is appended to the earlier capture" )
+            {
+                REQUIRE( readFile( savePath ) == "earlier capture\nfirst\n" );
+            }
+        }
+    }
+
+    GIVEN( "a device and a fixed save path" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+
+        WHEN( "a session is stopped and a new one started with the same path" )
+        {
+            SerialProcess first( configFor( device.devicePath() ), savePath );
+            REQUIRE( first.start() );
+            REQUIRE( device.send( "one\n" ) );
+            REQUIRE( waitFor( [ &first ]() { return first.lineCount() == 1; } ) );
+            first.stop();
+
+            SerialProcess second( configFor( device.devicePath() ), savePath );
+            REQUIRE( second.start() );
+            REQUIRE( device.send( "two\n" ) );
+            REQUIRE( waitFor( [ &second ]() { return second.lineCount() == 1; } ) );
+            second.stop();
+
+            THEN( "the file holds both captures" )
+            {
+                REQUIRE( readFile( savePath ) == "one\ntwo\n" );
+            }
+        }
+    }
 #endif
 }
+
+#ifdef Q_OS_UNIX
+SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
+{
+    GIVEN( "a running session writing to a generated file in the log directory" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = SerialProcess::generateLogPath( logDir.path(), device.devicePath() );
+
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "first\nsecond\n" ) );
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
+
+        WHEN( "rotating within the same second" )
+        {
+            const auto newPath = proc.rotateLog();
+
+            THEN( "the capture continues in a different file" )
+            {
+                REQUIRE_FALSE( newPath.isEmpty() );
+                REQUIRE( newPath != savePath );
+                REQUIRE( proc.tempFilePath() == newPath );
+                REQUIRE( QFileInfo::exists( newPath ) );
+            }
+
+            THEN( "the old file keeps its content" )
+            {
+                REQUIRE( readFile( savePath ) == "first\nsecond\n" );
+            }
+        }
+    }
+
+    GIVEN( "a running session writing to a temporary file" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "first\nsecond\n" ) );
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
+        const auto oldPath = proc.tempFilePath();
+
+        WHEN( "rotating" )
+        {
+            const auto newPath = proc.rotateLog();
+
+            THEN( "the capture continues in a different file" )
+            {
+                REQUIRE_FALSE( newPath.isEmpty() );
+                REQUIRE( newPath != oldPath );
+            }
+
+            THEN( "the old file keeps its content" )
+            {
+                REQUIRE( readFile( oldPath ) == "first\nsecond\n" );
+            }
+        }
+    }
+}
+#endif

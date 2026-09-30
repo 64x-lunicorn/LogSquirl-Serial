@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A session whose port cannot be opened is no longer listed as active:
   the error is shown once, no tab is opened, and no empty log file is left
   behind.
+- Starting, stopping and rotating never truncate an existing log file.
+  A save path is appended to, so Stop and Start with the dialog's fixed
+  save path keep the earlier capture; generated file names get a `_2`,
+  `_3`, … suffix when a file of that name exists, so a rotation within the
+  same second as the start no longer wipes the capture it rotates away
+  from.
+- A second session is refused instead of writing into the save path of
+  one that is still running.
+- A port given as a device path (`/dev/ttyUSB0`) gets a valid temporary
+  file name: the port name is sanitised, as it already was for files in
+  the log directory.
 
 ## [0.5.0] — 2026-06-22
 

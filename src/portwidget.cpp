@@ -45,6 +45,7 @@
 #include "plugin.h"
 
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -288,6 +289,16 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
         return false;
     }
 
+    // Two sessions appending to one file would interleave their lines.
+    if ( !savePath.isEmpty() && isFileInUse( savePath ) ) {
+        const auto message = QString( "Serial capture not started for %1: another session is "
+                                      "already writing to %2." )
+                                 .arg( name, savePath );
+        hostLog( LOGSQUIRL_LOG_WARNING, message );
+        hostNotify( message );
+        return false;
+    }
+
     auto* proc = new SerialProcess( config, savePath, this );
 
     connect( proc, &SerialProcess::finished, this,
@@ -443,9 +454,10 @@ void PortWidget::stopAllCaptures()
 
 void PortWidget::browseSavePath()
 {
-    const auto path
-        = QFileDialog::getSaveFileName( this, "Save serial output", savePathEdit_->text(),
-                                        "Log files (*.log *.txt);;All files (*)" );
+    // An existing file is appended to, not replaced, so don't ask to replace it.
+    const auto path = QFileDialog::getSaveFileName(
+        this, "Save serial output", savePathEdit_->text(), "Log files (*.log *.txt);;All files (*)",
+        nullptr, QFileDialog::DontConfirmOverwrite );
 
     if ( !path.isEmpty() ) {
         savePathEdit_->setText( path );
@@ -516,6 +528,17 @@ void PortWidget::updateUiState()
     else {
         statusLabel_->setText( "No active sessions" );
     }
+}
+
+bool PortWidget::isFileInUse( const QString& path ) const
+{
+    const QFileInfo file( path );
+    for ( const auto* proc : sessions_ ) {
+        if ( QFileInfo( proc->tempFilePath() ) == file ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 QString PortWidget::currentPortName() const

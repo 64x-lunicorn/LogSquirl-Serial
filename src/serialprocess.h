@@ -44,6 +44,7 @@
 
 #pragma once
 
+#include <QDateTime>
 #include <QFile>
 #include <QObject>
 #include <QSerialPort>
@@ -160,6 +161,22 @@ public:
     static SerialConfig defaultConfig();
 
     /**
+     * Return a path for a new log file in @p dir, named
+     * `<yyyy-MM-dd_HHmmss>_<port>.log`.  Characters of the port name that
+     * are not valid in file names (the '/' of "/dev/ttyUSB0") are
+     * replaced by '_'.  If that file exists, a number is appended
+     * (`…_2.log`, `…_3.log`, …), so that two captures within the same
+     * second never share a file.
+     *
+     * @param dir        Directory the file will be created in.
+     * @param portName   Serial port name.
+     * @param timestamp  Time the capture starts.
+     * @return Absolute path of a file that does not exist yet.
+     */
+    static QString generateLogPath( const QString& dir, const QString& portName,
+                                    const QDateTime& timestamp = QDateTime::currentDateTime() );
+
+    /**
      * Return the plugin's config directory from the host API.
      * Falls back to a temp path if the plugin is not initialised.
      */
@@ -170,6 +187,9 @@ public:
     /**
      * Open the log file and the serial port and start reading.  No-op if
      * already running.
+     *
+     * A save path is appended to, so an earlier capture in that file is
+     * never overwritten.
      *
      * On failure the reason has been emitted through errorOccurred(), and
      * a log file that start() created is removed again.

@@ -98,6 +98,7 @@ public:
      *
      * @param config    Serial port configuration.
      * @param savePath  Optional path to a .log file for persistent saving.
+     *                  Refused if another active session writes to it.
      * @return true if the session started successfully, false otherwise.
      */
     bool startSession( const SerialConfig& config, const QString& savePath = {} );
@@ -163,6 +164,9 @@ private:
 
     /** Return the port name of the currently selected entry, or empty. */
     QString currentPortName() const;
+
+    /** Whether an active session writes to the file at @p path. */
+    bool isFileInUse( const QString& path ) const;
 
     /** Build a SerialConfig from the current UI selections. */
     SerialConfig buildConfig() const;

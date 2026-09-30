@@ -50,6 +50,18 @@
 
 namespace serial_monitor {
 
+namespace {
+
+/// Make a port name usable as part of a file name on every platform.
+QString safeFileName( const QString& portName )
+{
+    auto name = portName;
+    name.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
+    return name;
+}
+
+} // namespace
+
 // ── Construction / destruction ──────────────────────────────────────────
 
 SerialProcess::SerialProcess( const SerialConfig& config, const QString& savePath, QObject* parent )
@@ -150,6 +162,19 @@ SerialConfig SerialProcess::defaultConfig()
     return cfg;
 }
 
+QString SerialProcess::generateLogPath( const QString& dir, const QString& portName,
+                                        const QDateTime& timestamp )
+{
+    const QDir logDir( dir );
+    const auto stem = timestamp.toString( "yyyy-MM-dd_HHmmss" ) + "_" + safeFileName( portName );
+
+    auto path = logDir.filePath( stem + ".log" );
+    for ( int n = 2; QFileInfo::exists( path ); ++n ) {
+        path = logDir.filePath( QString( "%1_%2.log" ).arg( stem ).arg( n ) );
+    }
+    return path;
+}
+
 // ── Instance: start / stop ──────────────────────────────────────────────
 
 bool SerialProcess::start()
@@ -161,22 +186,29 @@ bool SerialProcess::start()
     // When a save path is configured, write directly to the log directory
     // instead of creating a temporary file.  This avoids accumulating
     // orphaned temp files and ensures the user's log directory is used.
+    //
+    // Nothing is ever truncated: a save path is appended to, so that Stop
+    // and Start with the same path keep the earlier capture, and the temp
+    // file must be new.
     QString path;
+    QIODevice::OpenMode mode = QIODevice::WriteOnly;
     if ( !savePath_.isEmpty() ) {
         QDir().mkpath( QFileInfo( savePath_ ).absolutePath() );
         path = savePath_;
+        mode |= QIODevice::Append;
     }
     else {
         if ( !tempDir_.isValid() ) {
             Q_EMIT errorOccurred( "Failed to create temporary directory." );
             return false;
         }
-        path = tempDir_.path() + "/serial_" + config_.portName + ".log";
+        path = tempDir_.filePath( "serial_" + safeFileName( config_.portName ) + ".log" );
+        mode |= QIODevice::NewOnly;
     }
 
     createdLogFile_ = !QFileInfo::exists( path );
     tempFile_.setFileName( path );
-    if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+    if ( !tempFile_.open( mode ) ) {
         Q_EMIT errorOccurred( "Failed to open log file: " + tempFile_.errorString() );
         tempFile_.setFileName( {} );
         return false;
@@ -288,20 +320,19 @@ QString SerialProcess::rotateLog()
 
     // Generate the rotated file path.  When using the log directory,
     // create a new timestamped file there; otherwise use the temp dir.
+    // Either way the file must be new: opening an existing one would
+    // truncate an earlier capture.
     QString newPath;
     if ( usingSavePath_ ) {
-        const auto dir = QFileInfo( savePath_ ).absolutePath();
-        const auto timestamp = QDateTime::currentDateTime().toString( "yyyy-MM-dd_HHmmss" );
-        auto safeName = config_.portName;
-        safeName.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
-        newPath = QDir( dir ).filePath( QString( "%1_%2.log" ).arg( timestamp, safeName ) );
+        newPath = generateLogPath( QFileInfo( savePath_ ).absolutePath(), config_.portName );
     }
     else {
-        newPath = tempDir_.path() + "/serial_" + config_.portName + "_"
-                  + QString::number( rotationCount_ ) + ".log";
+        newPath = tempDir_.filePath( QString( "serial_%1_%2.log" )
+                                         .arg( safeFileName( config_.portName ) )
+                                         .arg( rotationCount_ ) );
     }
     tempFile_.setFileName( newPath );
-    if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+    if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::NewOnly ) ) {
         hostLog( LOGSQUIRL_LOG_ERROR,
                  "Failed to open rotated temp file: " + tempFile_.errorString() );
         return {};

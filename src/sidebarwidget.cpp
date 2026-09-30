@@ -38,13 +38,11 @@
 #include "plugin.h"
 #include "portwidget.h"
 
-#include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QRegularExpression>
 #include <QSettings>
 #include <QVBoxLayout>
 
@@ -467,11 +465,7 @@ QString SidebarWidget::generateSavePath( const QString& portName ) const
     QDir().mkpath( dir );
 
     // Format: YYYY-MM-dd_HHmmss_<port>.log
-    const auto timestamp = QDateTime::currentDateTime().toString( "yyyy-MM-dd_HHmmss" );
-    // Sanitise the port name for use as a filename component
-    auto safeName = portName;
-    safeName.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
-    return QDir( dir ).filePath( QString( "%1_%2.log" ).arg( timestamp, safeName ) );
+    return SerialProcess::generateLogPath( dir, portName );
 }
 
 void SidebarWidget::loadLogDir()
