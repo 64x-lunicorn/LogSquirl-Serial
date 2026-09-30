@@ -144,6 +144,43 @@ SCENARIO( "two sessions never write to the same file", "[portwidget]" )
 
         widget.stopAll();
     }
+
+    GIVEN( "a session whose save file has been deleted while it runs" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal firstDevice;
+        serial_test::PseudoTerminal secondDevice;
+        PortWidget widget;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        REQUIRE( widget.startSession( configFor( firstDevice.devicePath() ), savePath ) );
+        REQUIRE( QFile::remove( savePath ) );
+
+        WHEN( "starting a second port with a different, new save path" )
+        {
+            const auto started = widget.startSession( configFor( secondDevice.devicePath() ),
+                                                      logDir.filePath( "other.log" ) );
+
+            THEN( "it is accepted: two missing files are not the same file" )
+            {
+                REQUIRE( started );
+                REQUIRE( widget.isSessionActive( secondDevice.devicePath() ) );
+            }
+        }
+
+        WHEN( "starting a second port with the same save path, spelled differently" )
+        {
+            const auto started = widget.startSession( configFor( secondDevice.devicePath() ),
+                                                      logDir.path() + "/sub/../capture.log" );
+
+            THEN( "it is still refused" )
+            {
+                REQUIRE_FALSE( started );
+            }
+        }
+
+        widget.stopAll();
+    }
 }
 #endif
 
