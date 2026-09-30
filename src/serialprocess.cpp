@@ -80,6 +80,11 @@ SerialProcess::~SerialProcess()
     // finished() into it.
     blockSignals( true );
     stop();
+
+    // port_ is declared before the members its slots use, so it is
+    // destroyed after them; whatever it might still signal must not
+    // reach this object's slots.
+    port_.disconnect( this );
 }
 
 // ── Static: port discovery ──────────────────────────────────────────────
