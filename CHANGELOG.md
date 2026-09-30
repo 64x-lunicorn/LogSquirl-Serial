@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind.
 - Temporary log files are now actually removed on shutdown (0.4.0's temp
   file cleanup never took effect): each stopped session reported back that
-  it had ended, and handling that preserved its file.
+  it had ended, and handling that preserved its file; the files of a
+  rotated session were never removed at all.
 - Unplugging a device ends its session: it is removed from the list and
   the user is told the device was disconnected. Before, the session stayed
   listed as active, capturing nothing.

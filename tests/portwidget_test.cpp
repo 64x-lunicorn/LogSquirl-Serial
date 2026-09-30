@@ -266,6 +266,43 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
             QDir( QFileInfo( tempFile ).absolutePath() ).removeRecursively();
         }
     }
+
+    GIVEN( "a session writing to a temporary file that has been rotated" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        auto* widget = new PortWidget;
+        REQUIRE( widget->startSession( configFor( device.devicePath() ) ) );
+        widget->rotateSession( device.devicePath() );
+        REQUIRE( host.openedFiles.size() == 2 );
+        const auto tempDir = QFileInfo( host.openedFiles.first() ).absolutePath();
+        REQUIRE( QFileInfo( host.openedFiles.last() ).absolutePath() == tempDir );
+
+        WHEN( "the plugin shuts down: stopAll( true ), then the widget is deleted" )
+        {
+            widget->stopAll( true );
+            delete widget;
+
+            THEN( "the temporary directory is removed with the files of both tabs" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( tempDir ) );
+            }
+        }
+
+        WHEN( "the user stops all sessions: stopAll(), then the widget is deleted" )
+        {
+            widget->stopAll();
+            delete widget;
+
+            THEN( "the files of both tabs are kept" )
+            {
+                REQUIRE( QFileInfo::exists( host.openedFiles.first() ) );
+                REQUIRE( QFileInfo::exists( host.openedFiles.last() ) );
+            }
+
+            QDir( tempDir ).removeRecursively();
+        }
+    }
 }
 #endif
 

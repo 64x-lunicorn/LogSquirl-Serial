@@ -318,6 +318,11 @@ void SerialProcess::preserveTempFile()
     }
 }
 
+void SerialProcess::removeTempFiles()
+{
+    tempDir_.remove();
+}
+
 QString SerialProcess::rotateLog()
 {
     if ( !isRunning() ) {
