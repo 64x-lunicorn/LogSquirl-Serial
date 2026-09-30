@@ -30,10 +30,13 @@
 #include "fakehost.h"
 #include "plugin.h"
 #include "portwidget.h"
+#include "pseudoterminal.h"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QDialog>
+#include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 #include <QTimer>
 #include <QWidget>
@@ -136,3 +139,85 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
         logsquirl_plugin_shutdown();
     }
 }
+
+#ifdef Q_OS_UNIX
+namespace {
+
+/** Directory of the temporary file a session opened in a tab. */
+QString dirOf( const QString& file )
+{
+    return QFileInfo( file ).absolutePath();
+}
+
+serial_monitor::SerialConfig configFor( const QString& portName )
+{
+    serial_monitor::SerialConfig cfg;
+    cfg.portName = portName;
+    return cfg;
+}
+
+} // namespace
+
+SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
+{
+    GIVEN( "an initialised plugin with a stopped and a running temp-file session" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal firstDevice;
+        serial_test::PseudoTerminal secondDevice;
+        const auto* api = serial_monitor::g_state.api;
+        auto* handle = serial_monitor::g_state.handle;
+        REQUIRE( logsquirl_plugin_init( api, handle ) == 0 );
+        auto* widget = serial_monitor::g_state.dialog;
+        REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ) ) );
+        widget->stopSession( firstDevice.devicePath() );
+        REQUIRE( widget->startSession( configFor( secondDevice.devicePath() ) ) );
+        REQUIRE( host.openedFiles.size() == 2 );
+        const auto stoppedDir = dirOf( host.openedFiles.first() );
+        const auto runningDir = dirOf( host.openedFiles.last() );
+
+        WHEN( "LogSquirl quits, which shuts the plugin down" )
+        {
+            QMetaObject::invokeMethod( QCoreApplication::instance(), "aboutToQuit" );
+            logsquirl_plugin_shutdown();
+
+            THEN( "the temporary directories of both sessions are removed" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( stoppedDir ) );
+                REQUIRE_FALSE( QFileInfo::exists( runningDir ) );
+            }
+
+            AND_WHEN( "the plugin is loaded again and later disabled" )
+            {
+                host.openedFiles.clear();
+                REQUIRE( logsquirl_plugin_init( api, handle ) == 0 );
+                REQUIRE( serial_monitor::g_state.dialog->startSession(
+                    configFor( firstDevice.devicePath() ) ) );
+                const auto newDir = dirOf( host.openedFiles.first() );
+                logsquirl_plugin_shutdown();
+
+                THEN( "the earlier quit does not make it remove the new tab's file" )
+                {
+                    REQUIRE( QFileInfo::exists( newDir ) );
+                }
+
+                QDir( newDir ).removeRecursively();
+            }
+        }
+
+        WHEN( "the plugin is disabled or updated while LogSquirl keeps running" )
+        {
+            logsquirl_plugin_shutdown();
+
+            THEN( "the files of both sessions are kept for their open tabs" )
+            {
+                REQUIRE( QFileInfo::exists( host.openedFiles.first() ) );
+                REQUIRE( QFileInfo::exists( host.openedFiles.last() ) );
+            }
+
+            QDir( stoppedDir ).removeRecursively();
+            QDir( runningDir ).removeRecursively();
+        }
+    }
+}
+#endif

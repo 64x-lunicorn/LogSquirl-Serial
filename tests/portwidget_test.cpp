@@ -236,9 +236,9 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
         const auto tempFile = host.openedFiles.first();
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
 
-        WHEN( "the plugin shuts down: stopAll( true ), then the widget is deleted" )
+        WHEN( "LogSquirl quits: stopAll( TempFiles::Remove ), then the widget is deleted" )
         {
-            widget->stopAll( true );
+            widget->stopAll( PortWidget::TempFiles::Remove );
             const auto scansDuringStop = host.logs.filter( "Discovered" ).size() - scansBefore;
             delete widget;
 
@@ -282,9 +282,9 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
         REQUIRE( stoppedDir != runningDir );
         REQUIRE( QFileInfo::exists( stoppedDir ) );
 
-        WHEN( "the plugin shuts down: stopAll( true ), then the widget is deleted" )
+        WHEN( "LogSquirl quits: stopAll( TempFiles::Remove ), then the widget is deleted" )
         {
-            widget->stopAll( true );
+            widget->stopAll( PortWidget::TempFiles::Remove );
             delete widget;
 
             THEN( "the temporary directories of both sessions are removed" )
@@ -308,7 +308,7 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
 
         WHEN( "the plugin shuts down" )
         {
-            widget->stopAll( true );
+            widget->stopAll( PortWidget::TempFiles::Remove );
             delete widget;
 
             THEN( "the save file is kept" )
@@ -329,9 +329,9 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
         const auto tempDir = QFileInfo( host.openedFiles.first() ).absolutePath();
         REQUIRE( QFileInfo( host.openedFiles.last() ).absolutePath() == tempDir );
 
-        WHEN( "the plugin shuts down: stopAll( true ), then the widget is deleted" )
+        WHEN( "LogSquirl quits: stopAll( TempFiles::Remove ), then the widget is deleted" )
         {
-            widget->stopAll( true );
+            widget->stopAll( PortWidget::TempFiles::Remove );
             delete widget;
 
             THEN( "the temporary directory is removed with the files of both tabs" )

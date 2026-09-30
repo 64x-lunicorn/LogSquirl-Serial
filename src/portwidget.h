@@ -72,13 +72,21 @@ public:
     explicit PortWidget( QWidget* parent = nullptr );
     ~PortWidget() override = default;
 
-    /** Stop all active sessions.
-     *  @param cleanupTempFiles  If true, temporary log files are removed,
-     *         including those of earlier rotations and of sessions that
-     *         ended before (used during plugin shutdown).  If false, they are preserved
-     *         so that already-open tabs can still display the data.
+    /** What stopAll() does with the sessions' temporary log files. */
+    enum class TempFiles {
+        Keep,  ///< Keep them for the tabs that show them.
+        Remove ///< Remove them, including those of rotated and ended sessions.
+    };
+
+    /**
+     * Stop all active serial sessions.
+     *
+     * @param tempFiles  TempFiles::Remove only when LogSquirl quits: then
+     *         the tabs showing the files close too.  When the plugin is
+     *         disabled or updated at runtime, its tabs stay open, and the
+     *         files must be kept.
      */
-    void stopAll( bool cleanupTempFiles = false );
+    void stopAll( TempFiles tempFiles = TempFiles::Keep );
 
     /** Number of currently running sessions. */
     int activeSessionCount() const;
@@ -201,7 +209,7 @@ private:
 
     /**
      * Keep the temporary files of a session that has ended for its tabs,
-     * and remember them, so that stopAll( true ) removes them at shutdown.
+     * and remember them, so that stopAll( TempFiles::Remove ) removes them.
      */
     void keepTempFiles( SerialProcess* proc );
 

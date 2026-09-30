@@ -260,13 +260,13 @@ PortWidget::PortWidget( QWidget* parent )
 
 // ── Public methods ──────────────────────────────────────────────────────
 
-void PortWidget::stopAll( bool cleanupTempFiles )
+void PortWidget::stopAll( TempFiles tempFiles )
 {
     const auto portNames = sessions_.keys();
     for ( const auto& name : portNames ) {
         auto* proc = takeSession( name );
         proc->stop();
-        if ( cleanupTempFiles ) {
+        if ( tempFiles == TempFiles::Remove ) {
             // Also the files of earlier rotations, which rotateSession()
             // preserved for their tabs: at shutdown the tabs go too.
             proc->removeTempFiles();
@@ -276,7 +276,7 @@ void PortWidget::stopAll( bool cleanupTempFiles )
         }
         proc->deleteLater();
     }
-    if ( cleanupTempFiles ) {
+    if ( tempFiles == TempFiles::Remove ) {
         // The tabs of sessions that ended before close with the host too.
         // These are the sessions' own temporary directories, never a save
         // path or the log directory.
@@ -312,7 +312,7 @@ void PortWidget::rotateSession( const QString& portName )
     }
 
     // The old tab keeps showing the old file, so the temporary directory
-    // must outlive this session (stopAll( true ) still removes it).
+    // must outlive this session (stopAll( TempFiles::Remove ) still removes it).
     proc->preserveTempFile();
 
     // Open the new temp file in a follow-mode tab
@@ -583,7 +583,7 @@ SerialProcess* PortWidget::takeSession( const QString& portName )
     if ( proc ) {
         // The session is over as far as this widget is concerned.  Stopping
         // it emits finished(), and onSessionFinished() must not act on that:
-        // it would preserve a temp file that stopAll( true ) is cleaning up,
+        // it would preserve a temp file that stopAll() is about to remove,
         // and rescan the ports once per session.
         proc->disconnect( this );
     }

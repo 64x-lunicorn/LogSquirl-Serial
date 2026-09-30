@@ -153,6 +153,7 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     serial_monitor::g_state.api = api;
     serial_monitor::g_state.handle = handle;
     serial_monitor::g_state.initialised = true;
+    serial_monitor::g_state.quitting = false;
 
     api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
 
@@ -163,6 +164,15 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 
     // Create the PortWidget early so the sidebar panel can reference it.
     serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
+
+    // The host shuts the plugin down both when LogSquirl quits (after
+    // aboutToQuit) and when the plugin is disabled or updated at runtime,
+    // with the tabs left open; only in the first case may the temporary
+    // files go.
+    if ( auto* app = QCoreApplication::instance() ) {
+        QObject::connect( app, &QCoreApplication::aboutToQuit, serial_monitor::g_state.dialog,
+                          []() { serial_monitor::g_state.quitting = true; } );
+    }
 
     // Register a sidebar tab for serial session management
     serial_monitor::g_state.sidebarWidget
@@ -193,7 +203,9 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     }
 
     if ( serial_monitor::g_state.dialog ) {
-        serial_monitor::g_state.dialog->stopAll( true );
+        serial_monitor::g_state.dialog->stopAll(
+            serial_monitor::g_state.quitting ? serial_monitor::PortWidget::TempFiles::Remove
+                                             : serial_monitor::PortWidget::TempFiles::Keep );
         delete serial_monitor::g_state.dialog;
         serial_monitor::g_state.dialog = nullptr;
     }

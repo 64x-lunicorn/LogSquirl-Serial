@@ -60,6 +60,7 @@ struct PluginState {
     PortWidget* dialog = nullptr;           ///< Serial session dialog.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for session control.
     bool initialised = false;               ///< True between init() and shutdown().
+    bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
 };
 
 /// The single global instance — defined in plugin.cpp.
