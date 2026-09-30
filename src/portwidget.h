@@ -74,8 +74,8 @@ public:
 
     /** Stop all active sessions.
      *  @param cleanupTempFiles  If true, temporary log files are removed,
-     *         including those of earlier rotations (used during plugin
-     *         shutdown).  If false, they are preserved
+     *         including those of earlier rotations and of sessions that
+     *         ended before (used during plugin shutdown).  If false, they are preserved
      *         so that already-open tabs can still display the data.
      */
     void stopAll( bool cleanupTempFiles = false );
@@ -199,6 +199,12 @@ private:
      */
     SerialProcess* takeSession( const QString& portName );
 
+    /**
+     * Keep the temporary files of a session that has ended for its tabs,
+     * and remember them, so that stopAll( true ) removes them at shutdown.
+     */
+    void keepTempFiles( SerialProcess* proc );
+
     /** Whether an active session writes to the file at @p path. */
     bool isFileInUse( const QString& path ) const;
 
@@ -239,6 +245,9 @@ private:
     QStringList ports_; ///< Result of the last port scan.
 
     QMap<QString, SerialProcess*> sessions_;
+
+    /// Temporary directories of ended sessions, kept for their tabs until shutdown.
+    QStringList endedTempDirs_;
 };
 
 } // namespace serial_monitor

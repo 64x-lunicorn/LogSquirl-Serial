@@ -314,13 +314,15 @@ bool SerialProcess::sendData( const QByteArray& data )
     return true;
 }
 
-void SerialProcess::preserveTempFile()
+QString SerialProcess::preserveTempFile()
 {
     // When writing directly to the log directory, the temp dir is unused
     // and can be auto-removed safely.
-    if ( !usingSavePath_ ) {
-        tempDir_.setAutoRemove( false );
+    if ( usingSavePath_ ) {
+        return {};
     }
+    tempDir_.setAutoRemove( false );
+    return tempDir_.path();
 }
 
 void SerialProcess::removeTempFiles()

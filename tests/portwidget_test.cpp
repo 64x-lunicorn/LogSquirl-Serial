@@ -267,6 +267,57 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
         }
     }
 
+    GIVEN( "a temporary-file session that was stopped before another one started" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal firstDevice;
+        serial_test::PseudoTerminal secondDevice;
+        auto* widget = new PortWidget;
+        REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ) ) );
+        widget->stopSession( firstDevice.devicePath() );
+        REQUIRE( widget->startSession( configFor( secondDevice.devicePath() ) ) );
+        REQUIRE( host.openedFiles.size() == 2 );
+        const auto stoppedDir = QFileInfo( host.openedFiles.first() ).absolutePath();
+        const auto runningDir = QFileInfo( host.openedFiles.last() ).absolutePath();
+        REQUIRE( stoppedDir != runningDir );
+        REQUIRE( QFileInfo::exists( stoppedDir ) );
+
+        WHEN( "the plugin shuts down: stopAll( true ), then the widget is deleted" )
+        {
+            widget->stopAll( true );
+            delete widget;
+
+            THEN( "the temporary directories of both sessions are removed" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( stoppedDir ) );
+                REQUIRE_FALSE( QFileInfo::exists( runningDir ) );
+            }
+        }
+    }
+
+    GIVEN( "a stopped session that wrote to a save path" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal firstDevice;
+        serial_test::PseudoTerminal secondDevice;
+        auto* widget = new PortWidget;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ), savePath ) );
+        widget->stopSession( firstDevice.devicePath() );
+
+        WHEN( "the plugin shuts down" )
+        {
+            widget->stopAll( true );
+            delete widget;
+
+            THEN( "the save file is kept" )
+            {
+                REQUIRE( QFileInfo::exists( savePath ) );
+            }
+        }
+    }
+
     GIVEN( "a session writing to a temporary file that has been rotated" )
     {
         FakeHost host;

@@ -18,10 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A session whose port cannot be opened is no longer listed as active:
   the error is shown once, no tab is opened, and no empty log file is left
   behind.
-- Temporary log files are now actually removed on shutdown (0.4.0's temp
-  file cleanup never took effect): each stopped session reported back that
-  it had ended, and handling that preserved its file; the files of a
-  rotated session were never removed at all.
+- Temporary log files are now removed on shutdown: those of the running
+  sessions and of every session that was stopped, ended or rotated away
+  before, whose tabs close with LogSquirl. 0.4.0's cleanup never took
+  effect: each session stopped at shutdown reported back that it had
+  ended, and handling that preserved its file, while the files of earlier
+  and rotated sessions were never removed at all. Save paths and files in
+  the log directory are never removed.
 - Starting or stopping a capture no longer enumerates the serial ports,
   which blocks the UI, up to twice per click (once for the dialog, once
   for the sidebar). The dialog and sidebar now share one port list, which
