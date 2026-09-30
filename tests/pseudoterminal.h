@@ -36,6 +36,7 @@
 #include <QString>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -70,6 +71,22 @@ public:
     {
         return ::write( controller_, data.constData(), static_cast<size_t>( data.size() ) )
                == data.size();
+    }
+
+    /** Everything sent to the device so far that has not been received yet. */
+    QByteArray receive()
+    {
+        QByteArray data;
+        pollfd readable{ controller_, POLLIN, 0 };
+        char chunk[ 256 ];
+        while ( poll( &readable, 1, 50 ) > 0 && ( readable.revents & POLLIN ) ) {
+            const auto n = ::read( controller_, chunk, sizeof( chunk ) );
+            if ( n <= 0 ) {
+                break;
+            }
+            data.append( chunk, n );
+        }
+        return data;
     }
 
     /** Close the device side, as if the device had been unplugged. */

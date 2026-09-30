@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unplugging a device ends its session: it is removed from the list and
   the user is told the device was disconnected. Before, the session stayed
   listed as active, capturing nothing.
+- The sidebar no longer sends a command to some other running capture
+  when the selected port has none; it says so instead. Its send controls
+  are only enabled for a selected port with a running capture, as in the
+  dialog.
 - The Serial Monitor dialog (Plugins menu) stays on top of LogSquirl's
   window, and no longer keeps LogSquirl running when it is open while the
   main window is closed.

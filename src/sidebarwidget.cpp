@@ -323,24 +323,19 @@ void SidebarWidget::sendCommand()
         return;
     }
 
+    // Only ever send to the selected port.  Another device may react to
+    // the command in ways nobody intended.
     const auto name = currentPortName();
-    if ( name.isEmpty() || !portWidget_->isSessionActive( name ) ) {
-        // Fall back to first active session if current port has none
-        const auto active = portWidget_->activePorts();
-        if ( active.isEmpty() ) {
-            return;
-        }
-        const auto target = active.first();
-        const auto lineEnding
-            = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
-        portWidget_->sendToSession( target, text.toUtf8(), lineEnding );
-    }
-    else {
-        const auto lineEnding
-            = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
-        portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
+    if ( !portWidget_->isSessionActive( name ) ) {
+        hostNotify(
+            name.isEmpty()
+                ? QString( "Select a port with a running capture to send a command." )
+                : QString( "No capture is running on %1; the command was not sent." ).arg( name ) );
+        return;
     }
 
+    const auto lineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
+    portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
     sendEdit_->clear();
 }
 
@@ -435,11 +430,10 @@ void SidebarWidget::updateUiState()
     stopAllButton_->setEnabled( activeCount > 0 );
     stopAllButton_->setVisible( activeCount > 1 );
 
-    // Send controls are enabled when any session is active
-    const bool canSend = activeCount > 0;
-    sendEdit_->setEnabled( canSend );
-    sendButton_->setEnabled( canSend );
-    lineEndingCombo_->setEnabled( canSend );
+    // Send controls enabled when the currently selected port has an active session
+    sendEdit_->setEnabled( isActive );
+    sendButton_->setEnabled( isActive );
+    lineEndingCombo_->setEnabled( isActive );
 
     if ( activeCount == 0 ) {
         statusLabel_->setText( {} );
