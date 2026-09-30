@@ -472,3 +472,30 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
     }
 }
 #endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "destroying a running session does not call back its owner", "[serialprocess]" )
+{
+    GIVEN( "a running session with listeners" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        int signalCount = 0;
+        auto* proc = new SerialProcess( configFor( device.devicePath() ) );
+        QObject::connect( proc, &SerialProcess::finished, [ &signalCount ]() { ++signalCount; } );
+        QObject::connect( proc, &SerialProcess::errorOccurred,
+                          [ &signalCount ]( const QString& ) { ++signalCount; } );
+        REQUIRE( proc->start() );
+
+        WHEN( "it is destroyed, as when its owner's children are deleted" )
+        {
+            delete proc;
+
+            THEN( "no signal is emitted into the (possibly half-destroyed) owner" )
+            {
+                REQUIRE( signalCount == 0 );
+            }
+        }
+    }
+}
+#endif

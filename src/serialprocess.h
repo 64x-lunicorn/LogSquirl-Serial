@@ -108,6 +108,8 @@ public:
      */
     explicit SerialProcess( const SerialConfig& config, const QString& savePath = {},
                             QObject* parent = nullptr );
+
+    /** Closes the port without emitting any signal. */
     ~SerialProcess() override;
 
     // ── Static helpers ───────────────────────────────────────────────
