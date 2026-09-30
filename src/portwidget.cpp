@@ -270,18 +270,14 @@ void PortWidget::rotateSession( const QString& portName )
 
     const auto newPath = proc->rotateLog();
     if ( newPath.isEmpty() ) {
-        if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification( g_state.handle,
-                                            qPrintable( "Failed to rotate log for " + portName ) );
-        }
+        hostNotify( "Failed to rotate log for " + portName );
         return;
     }
 
     // Open the new temp file in a follow-mode tab
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, newPath.toUtf8().constData(), 1 );
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( QString( "New session started for %1" ).arg( portName ) ) );
+        hostNotify( QString( "New session started for %1" ).arg( portName ) );
     }
 }
 
@@ -295,7 +291,7 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
     auto* proc = new SerialProcess( config, savePath, this );
 
     connect( proc, &SerialProcess::started, this, [ this, name ]() {
-        hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Serial session started for " + name ) );
+        hostLog( LOGSQUIRL_LOG_INFO, "Serial session started for " + name );
     } );
 
     connect( proc, &SerialProcess::finished, this,
@@ -312,10 +308,9 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
         if ( g_state.api && g_state.handle ) {
             const auto path = proc->tempFilePath().toUtf8();
             g_state.api->open_file( g_state.handle, path.constData(), 1 );
-            g_state.api->show_notification(
-                g_state.handle, qPrintable( QString( "Serial capture started for %1 at %2 baud" )
-                                                .arg( name )
-                                                .arg( config.baudRate ) ) );
+            hostNotify( QString( "Serial capture started for %1 at %2 baud" )
+                            .arg( name )
+                            .arg( config.baudRate ) );
         }
 
         refreshPorts();
@@ -336,12 +331,9 @@ void PortWidget::stopSession( const QString& portName )
     proc->stop();
     proc->preserveTempFile();
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
-                                            .arg( portName )
-                                            .arg( proc->lineCount() ) ) );
-    }
+    hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
+                    .arg( portName )
+                    .arg( proc->lineCount() ) );
 
     proc->deleteLater();
     refreshPorts();
@@ -414,8 +406,7 @@ void PortWidget::startCapture()
 
     // Don't start twice for the same port
     if ( sessions_.contains( name ) ) {
-        hostLog( LOGSQUIRL_LOG_WARNING,
-                 qPrintable( "Serial capture already running for " + name ) );
+        hostLog( LOGSQUIRL_LOG_WARNING, "Serial capture already running for " + name );
         return;
     }
 
@@ -428,7 +419,7 @@ void PortWidget::startCapture()
     auto* proc = new SerialProcess( config, savePath, this );
 
     connect( proc, &SerialProcess::started, this, [ this, name ]() {
-        hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Serial session started for " + name ) );
+        hostLog( LOGSQUIRL_LOG_INFO, "Serial session started for " + name );
     } );
 
     connect( proc, &SerialProcess::finished, this,
@@ -449,12 +440,9 @@ void PortWidget::startCapture()
         }
 
         // Notify via host notification
-        if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification(
-                g_state.handle, qPrintable( QString( "Serial capture started for %1 at %2 baud" )
-                                                .arg( name )
-                                                .arg( config.baudRate ) ) );
-        }
+        hostNotify( QString( "Serial capture started for %1 at %2 baud" )
+                        .arg( name )
+                        .arg( config.baudRate ) );
     }
     else {
         delete proc;
@@ -475,12 +463,9 @@ void PortWidget::stopCapture()
     proc->preserveTempFile();
     proc->deleteLater();
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
-                                            .arg( name )
-                                            .arg( proc->lineCount() ) ) );
-    }
+    hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
+                    .arg( name )
+                    .arg( proc->lineCount() ) );
 
     refreshPorts();
 }
@@ -489,9 +474,7 @@ void PortWidget::stopAllCaptures()
 {
     stopAll();
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification( g_state.handle, "All serial sessions stopped." );
-    }
+    hostNotify( "All serial sessions stopped." );
 
     refreshPorts();
 }
@@ -534,8 +517,7 @@ void PortWidget::onSessionFinished( const QString& portName )
         proc->preserveTempFile();
         proc->deleteLater();
 
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 qPrintable( QString( "Serial session for %1 ended." ).arg( portName ) ) );
+        hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
     }
 
     refreshPorts();
@@ -543,12 +525,9 @@ void PortWidget::onSessionFinished( const QString& portName )
 
 void PortWidget::onSessionError( const QString& portName, const QString& message )
 {
-    hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( portName + ": " + message ) );
+    hostLog( LOGSQUIRL_LOG_ERROR, portName + ": " + message );
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( "Serial error (" + portName + "): " + message ) );
-    }
+    hostNotify( "Serial error (" + portName + "): " + message );
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────

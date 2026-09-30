@@ -55,10 +55,17 @@
 namespace serial_monitor {
 PluginState g_state;
 
-void hostLog( int level, const char* message )
+void hostLog( int level, const QString& message )
 {
     if ( g_state.api && g_state.handle ) {
-        g_state.api->log_message( g_state.handle, level, message );
+        g_state.api->log_message( g_state.handle, level, message.toUtf8().constData() );
+    }
+}
+
+void hostNotify( const QString& message )
+{
+    if ( g_state.api && g_state.handle ) {
+        g_state.api->show_notification( g_state.handle, message.toUtf8().constData() );
     }
 }
 } // namespace serial_monitor
@@ -205,9 +212,8 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
 
     if ( ok ) {
         settings.setValue( "serial/defaultBaud", newBaud );
-        serial_monitor::hostLog(
-            LOGSQUIRL_LOG_INFO,
-            qPrintable( QString( "Default baud rate set to %1" ).arg( newBaud ) ) );
+        serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
+                                 QString( "Default baud rate set to %1" ).arg( newBaud ) );
     }
 }
 

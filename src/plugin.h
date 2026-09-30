@@ -38,6 +38,8 @@
 
 #include "logsquirl_plugin_api.h"
 
+#include <QString>
+
 namespace serial_monitor {
 class PortWidget;
 class SidebarWidget;
@@ -64,6 +66,11 @@ struct PluginState {
 extern PluginState g_state;
 
 /// Log a message through the host API (no-op if not initialised).
-void hostLog( int level, const char* message );
+/// The host decodes the message as UTF-8.
+void hostLog( int level, const QString& message );
+
+/// Show a host notification (no-op if not initialised).
+/// The host decodes the message as UTF-8.
+void hostNotify( const QString& message );
 
 } // namespace serial_monitor

@@ -313,9 +313,7 @@ void SidebarWidget::stopAllCaptures()
 {
     portWidget_->stopAll();
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification( g_state.handle, "All serial sessions stopped." );
-    }
+    hostNotify( "All serial sessions stopped." );
 
     refreshPorts();
 }

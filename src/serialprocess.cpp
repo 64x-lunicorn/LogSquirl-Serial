@@ -81,8 +81,7 @@ QStringList SerialProcess::discoverPorts()
     const auto allPorts = QSerialPortInfo::availablePorts();
     const auto ports = filterPorts( allPorts );
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             qPrintable( QString( "Discovered %1 serial port(s)." ).arg( ports.size() ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO, QString( "Discovered %1 serial port(s)." ).arg( ports.size() ) );
     return ports;
 }
 
@@ -176,10 +175,8 @@ void SerialProcess::start()
         return;
     }
 
-    hostLog(
-        LOGSQUIRL_LOG_INFO,
-        qPrintable(
-            QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
     Q_EMIT started();
 }
 
@@ -207,9 +204,8 @@ void SerialProcess::stop()
 
     tempFile_.close();
 
-    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( QString( "Closed %1 (%2 lines captured)" )
-                                                 .arg( config_.portName )
-                                                 .arg( lineCount_ ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Closed %1 (%2 lines captured)" ).arg( config_.portName ).arg( lineCount_ ) );
     Q_EMIT finished();
 }
 
@@ -308,13 +304,13 @@ QString SerialProcess::rotateLog()
     tempFile_.setFileName( newPath );
     if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
         hostLog( LOGSQUIRL_LOG_ERROR,
-                 qPrintable( "Failed to open rotated temp file: " + tempFile_.errorString() ) );
+                 "Failed to open rotated temp file: " + tempFile_.errorString() );
         return {};
     }
 
-    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( QString( "Rotated serial log for %1 (rotation #%2)" )
-                                                 .arg( config_.portName )
-                                                 .arg( rotationCount_ ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
+                                     .arg( config_.portName )
+                                     .arg( rotationCount_ ) );
 
     return newPath;
 }
@@ -372,7 +368,7 @@ void SerialProcess::onPortError( QSerialPort::SerialPortError error )
 
     const auto msg
         = QString( "Serial port error on %1: %2" ).arg( config_.portName, port_.errorString() );
-    hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( msg ) );
+    hostLog( LOGSQUIRL_LOG_ERROR, msg );
     Q_EMIT errorOccurred( msg );
 }
 

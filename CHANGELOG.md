@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Log messages and notifications reach LogSquirl as UTF-8, so non-ASCII
+  port names and paths are no longer garbled on systems whose local
+  8-bit encoding is not UTF-8.
+
 ## [0.5.0] — 2026-06-22
 
 ### Added
