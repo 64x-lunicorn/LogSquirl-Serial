@@ -54,8 +54,6 @@
 #include <QMessageBox>
 #include <QVBoxLayout>
 
-#include <utility>
-
 namespace serial_monitor {
 
 namespace {
@@ -260,30 +258,14 @@ PortWidget::PortWidget( QWidget* parent )
 
 // ── Public methods ──────────────────────────────────────────────────────
 
-void PortWidget::stopAll( TempFiles tempFiles )
+void PortWidget::stopAll()
 {
     const auto portNames = sessions_.keys();
     for ( const auto& name : portNames ) {
         auto* proc = takeSession( name );
         proc->stop();
-        if ( tempFiles == TempFiles::Remove ) {
-            // Also the files of earlier rotations, which rotateSession()
-            // preserved for their tabs: at shutdown the tabs go too.
-            proc->removeTempFiles();
-        }
-        else {
-            keepTempFiles( proc );
-        }
+        proc->preserveTempFile();
         proc->deleteLater();
-    }
-    if ( tempFiles == TempFiles::Remove ) {
-        // The tabs of sessions that ended before close with the host too.
-        // These are the sessions' own temporary directories, never a save
-        // path or the log directory.
-        for ( const auto& dir : std::as_const( endedTempDirs_ ) ) {
-            QDir( dir ).removeRecursively();
-        }
-        endedTempDirs_.clear();
     }
     updatePortCombo();
 }
@@ -312,7 +294,7 @@ void PortWidget::rotateSession( const QString& portName )
     }
 
     // The old tab keeps showing the old file, so the temporary directory
-    // must outlive this session (stopAll( TempFiles::Remove ) still removes it).
+    // must outlive this session (until LogSquirl quits, see tempdirs.h).
     proc->preserveTempFile();
 
     // Open the new temp file in a follow-mode tab
@@ -384,7 +366,7 @@ void PortWidget::stopSession( const QString& portName )
     }
 
     proc->stop();
-    keepTempFiles( proc );
+    proc->preserveTempFile();
 
     hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
                     .arg( portName )
@@ -534,7 +516,7 @@ void PortWidget::onSessionFinished( const QString& portName )
 
     // Preserve the temp file so the LogSquirl tab keeps its content.
     // When using a save path the file is already persistent.
-    keepTempFiles( proc );
+    proc->preserveTempFile();
     proc->deleteLater();
 
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
@@ -583,19 +565,11 @@ SerialProcess* PortWidget::takeSession( const QString& portName )
     if ( proc ) {
         // The session is over as far as this widget is concerned.  Stopping
         // it emits finished(), and onSessionFinished() must not act on that:
-        // it would preserve a temp file that stopAll() is about to remove,
-        // and rescan the ports once per session.
+        // it would end the session a second time, and rescan the ports once
+        // per session.
         proc->disconnect( this );
     }
     return proc;
-}
-
-void PortWidget::keepTempFiles( SerialProcess* proc )
-{
-    const auto dir = proc->preserveTempFile();
-    if ( !dir.isEmpty() && !endedTempDirs_.contains( dir ) ) {
-        endedTempDirs_.append( dir );
-    }
 }
 
 bool PortWidget::isFileInUse( const QString& path ) const

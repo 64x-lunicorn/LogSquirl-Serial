@@ -46,6 +46,7 @@
 #include "portwidget.h"
 #include "serialprocess.h"
 #include "sidebarwidget.h"
+#include "tempdirs.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -157,6 +158,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 
     api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
 
+    // Files of LogSquirl processes that ended without removing them,
+    // e.g. after a crash: no tab can show them any more.
+    serial_monitor::removeStaleTempDirs( serial_monitor::tempRoot() );
+
     // Add "Serial Monitor…" to the Plugins menu.  When clicked it opens
     // a non-modal dialog for port selection and session management.
     api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026", &showSerialDialog,
@@ -203,11 +208,17 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     }
 
     if ( serial_monitor::g_state.dialog ) {
-        serial_monitor::g_state.dialog->stopAll(
-            serial_monitor::g_state.quitting ? serial_monitor::PortWidget::TempFiles::Remove
-                                             : serial_monitor::PortWidget::TempFiles::Keep );
+        serial_monitor::g_state.dialog->stopAll();
         delete serial_monitor::g_state.dialog;
         serial_monitor::g_state.dialog = nullptr;
+    }
+
+    // The tabs close with LogSquirl: remove the files of every instance of
+    // the plugin in this process, also those of instances before a runtime
+    // disable or update, which only the directory names remember.  Save
+    // paths and the log directory are never touched.
+    if ( serial_monitor::g_state.quitting ) {
+        serial_monitor::removeOwnTempDirs( serial_monitor::tempRoot() );
     }
 
     serial_monitor::g_state.api = nullptr;

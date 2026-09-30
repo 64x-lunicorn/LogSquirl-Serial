@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported back that it had ended, and handling that preserved its file,
   while the files of earlier and rotated sessions were never removed at
   all. Save paths and files in the log directory are never removed.
+- Temporary log files are now also removed when LogSquirl quits after the
+  plugin was disabled and enabled again, or updated, while it kept running.
+  The new plugin did not know the files the earlier one had kept for its
+  tabs, so they stayed for good. Their directories are now named
+  `logsquirl-serial-<pid>-XXXXXX` after the LogSquirl process, and at quit
+  the plugin removes every one with its own process ID. Directories left
+  behind by a LogSquirl that no longer runs, e.g. after a crash, are removed
+  when the plugin starts; those of a running LogSquirl, links and, on Unix,
+  other users' directories are left alone.
 - Starting or stopping a capture no longer enumerates the serial ports,
   which blocks the UI, up to twice per click (once for the dialog, once
   for the sidebar). The dialog and sidebar now share one port list, which

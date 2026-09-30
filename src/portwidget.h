@@ -72,21 +72,14 @@ public:
     explicit PortWidget( QWidget* parent = nullptr );
     ~PortWidget() override = default;
 
-    /** What stopAll() does with the sessions' temporary log files. */
-    enum class TempFiles {
-        Keep,  ///< Keep them for the tabs that show them.
-        Remove ///< Remove them, including those of rotated and ended sessions.
-    };
-
     /**
      * Stop all active serial sessions.
      *
-     * @param tempFiles  TempFiles::Remove only when LogSquirl quits: then
-     *         the tabs showing the files close too.  When the plugin is
-     *         disabled or updated at runtime, its tabs stay open, and the
-     *         files must be kept.
+     * Their temporary log files are kept for the tabs that show them, also
+     * when the plugin is disabled or updated at runtime.  The plugin removes
+     * them when LogSquirl quits (see tempdirs.h).
      */
-    void stopAll( TempFiles tempFiles = TempFiles::Keep );
+    void stopAll();
 
     /** Number of currently running sessions. */
     int activeSessionCount() const;
@@ -207,12 +200,6 @@ private:
      */
     SerialProcess* takeSession( const QString& portName );
 
-    /**
-     * Keep the temporary files of a session that has ended for its tabs,
-     * and remember them, so that stopAll( TempFiles::Remove ) removes them.
-     */
-    void keepTempFiles( SerialProcess* proc );
-
     /** Whether an active session writes to the file at @p path. */
     bool isFileInUse( const QString& path ) const;
 
@@ -253,9 +240,6 @@ private:
     QStringList ports_; ///< Result of the last port scan.
 
     QMap<QString, SerialProcess*> sessions_;
-
-    /// Temporary directories of ended sessions, kept for their tabs until shutdown.
-    QStringList endedTempDirs_;
 };
 
 } // namespace serial_monitor
