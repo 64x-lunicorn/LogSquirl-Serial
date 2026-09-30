@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log messages and notifications reach LogSquirl as UTF-8, so non-ASCII
   port names and paths are no longer garbled on systems whose local
   8-bit encoding is not UTF-8.
+- Lines ending in `\r\n` no longer keep a stray carriage return, and a
+  lone `\r` now ends a line. A stream that never ends its lines (binary
+  data, a progress display) is written out every 64 KiB instead of
+  growing the read buffer without bound.
 
 ## [0.5.0] — 2026-06-22
 

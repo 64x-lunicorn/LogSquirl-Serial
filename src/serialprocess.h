@@ -132,6 +132,28 @@ public:
      */
     static QStringList filterPorts( const QList<QSerialPortInfo>& ports );
 
+    /// Longest line takeLines() waits for before forcing it out.
+    static constexpr qsizetype kMaxLineLength = 64 * 1024;
+
+    /**
+     * Remove every complete line from the front of @p buffer and return
+     * the lines, without their terminator.  "\n", "\r\n" and a lone "\r"
+     * all end a line.  An incomplete last line stays in the buffer until
+     * more data arrives, unless it is longer than @p maxLineLength: then
+     * it is returned as a line of its own, so that a stream that never
+     * ends its lines (binary data, a progress display) cannot make the
+     * buffer grow without bound.
+     *
+     * Extracted as a static helper so unit tests can exercise the line
+     * splitting without real hardware.
+     *
+     * @param buffer         Bytes read so far; complete lines are removed.
+     * @param maxLineLength  Size above which an incomplete line is forced out.
+     * @return The complete lines, in order.
+     */
+    static QList<QByteArray> takeLines( QByteArray& buffer,
+                                        qsizetype maxLineLength = kMaxLineLength );
+
     /**
      * Return a sensible default configuration (115200 8N1, no FC, timestamps on).
      */
@@ -244,6 +266,12 @@ private Q_SLOTS:
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
+    /** Write one line to the log file, timestamped if configured. */
+    void writeLine( const QByteArray& line );
+
+    /** Write out a buffered partial line, e.g. before the file is closed. */
+    void flushPartialLine();
+
     SerialConfig config_;
     QString savePath_;
 

@@ -106,6 +106,35 @@ QStringList SerialProcess::filterPorts( const QList<QSerialPortInfo>& ports )
     return result;
 }
 
+QList<QByteArray> SerialProcess::takeLines( QByteArray& buffer, qsizetype maxLineLength )
+{
+    QList<QByteArray> lines;
+    qsizetype start = 0;
+    for ( qsizetype i = 0; i < buffer.size(); ++i ) {
+        const auto c = buffer.at( i );
+        if ( c != '\n' && c != '\r' ) {
+            continue;
+        }
+        // A CR at the end of the data may be the first half of a CRLF:
+        // wait for the next byte rather than emit a spurious empty line.
+        if ( c == '\r' && i + 1 == buffer.size() ) {
+            break;
+        }
+        lines.append( buffer.mid( start, i - start ) );
+        if ( c == '\r' && buffer.at( i + 1 ) == '\n' ) {
+            ++i;
+        }
+        start = i + 1;
+    }
+    buffer.remove( 0, start );
+
+    if ( buffer.size() > maxLineLength ) {
+        lines.append( buffer );
+        buffer.clear();
+    }
+    return lines;
+}
+
 SerialConfig SerialProcess::defaultConfig()
 {
     SerialConfig cfg;
@@ -189,18 +218,7 @@ void SerialProcess::stop()
     port_.close();
 
     // Flush any remaining partial line
-    if ( !readBuffer_.isEmpty() ) {
-        if ( config_.timestamps ) {
-            const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
-            tempFile_.write( "[" + ts.toUtf8() + "] " );
-        }
-        tempFile_.write( readBuffer_ );
-        tempFile_.write( "\n", 1 );
-        tempFile_.flush();
-
-        ++lineCount_;
-        readBuffer_.clear();
-    }
+    flushPartialLine();
 
     tempFile_.close();
 
@@ -239,15 +257,8 @@ bool SerialProcess::sendData( const QByteArray& data )
     }
 
     // Log the sent data as a [TX] line in the output file
-    if ( config_.timestamps ) {
-        const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
-        tempFile_.write( "[" + ts.toUtf8() + "] " );
-    }
-    tempFile_.write( "[TX] " );
-    tempFile_.write( data );
-    tempFile_.write( "\n", 1 );
+    writeLine( "[TX] " + data );
     tempFile_.flush();
-    ++lineCount_;
 
     Q_EMIT dataSent( data );
     return true;
@@ -269,17 +280,7 @@ QString SerialProcess::rotateLog()
     }
 
     // Flush any pending partial line to the old file before rotating
-    if ( !readBuffer_.isEmpty() ) {
-        if ( config_.timestamps ) {
-            const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
-            tempFile_.write( "[" + ts.toUtf8() + "] " );
-        }
-        tempFile_.write( readBuffer_ );
-        tempFile_.write( "\n", 1 );
-        tempFile_.flush();
-        ++lineCount_;
-        readBuffer_.clear();
-    }
+    flushPartialLine();
 
     // Close the old temp file (it stays on disk for the old tab)
     tempFile_.close();
@@ -325,38 +326,44 @@ QString SerialProcess::tempFilePath() const
     return tempFile_.fileName();
 }
 
+// ── Private helpers ─────────────────────────────────────────────────────
+
+void SerialProcess::writeLine( const QByteArray& line )
+{
+    if ( config_.timestamps ) {
+        const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
+        tempFile_.write( "[" + ts.toUtf8() + "] " );
+    }
+    tempFile_.write( line );
+    tempFile_.write( "\n", 1 );
+    ++lineCount_;
+}
+
+void SerialProcess::flushPartialLine()
+{
+    if ( readBuffer_.isEmpty() ) {
+        return;
+    }
+
+    if ( readBuffer_.endsWith( '\r' ) ) {
+        readBuffer_.chop( 1 );
+    }
+    writeLine( readBuffer_ );
+    tempFile_.flush();
+    readBuffer_.clear();
+}
+
 // ── Private slots ───────────────────────────────────────────────────────
 
 void SerialProcess::onReadyRead()
 {
     readBuffer_.append( port_.readAll() );
 
-    int start = 0;
-    for ( int i = 0; i < readBuffer_.size(); ++i ) {
-        if ( readBuffer_[ i ] == '\n' ) {
-            const auto lineData = readBuffer_.mid( start, i - start );
-            start = i + 1;
-
-            // Optionally prepend timestamp
-            if ( config_.timestamps ) {
-                const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
-                const auto prefix = "[" + ts.toUtf8() + "] ";
-                tempFile_.write( prefix );
-            }
-
-            // Write line data to temp file
-            tempFile_.write( lineData );
-            tempFile_.write( "\n", 1 );
-            tempFile_.flush();
-
-            ++lineCount_;
-        }
+    const auto lines = takeLines( readBuffer_ );
+    for ( const auto& line : lines ) {
+        writeLine( line );
     }
-
-    // Keep any incomplete trailing data in the buffer
-    if ( start > 0 ) {
-        readBuffer_.remove( 0, start );
-    }
+    tempFile_.flush();
 }
 
 void SerialProcess::onPortError( QSerialPort::SerialPortError error )
