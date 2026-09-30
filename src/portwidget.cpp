@@ -62,6 +62,10 @@ PortWidget::PortWidget( QWidget* parent )
     setWindowTitle( "Serial Monitor" );
     setMinimumWidth( 480 );
 
+    // A top-level window of the plugin's own: when it is open while the
+    // user closes LogSquirl's main window, LogSquirl must still quit.
+    setAttribute( Qt::WA_QuitOnClose, false );
+
     auto* mainLayout = new QVBoxLayout( this );
 
     // ── Port selection group ─────────────────────────────────────────

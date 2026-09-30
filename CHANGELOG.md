@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Temporary log files are now actually removed on shutdown (0.4.0's temp
   file cleanup never took effect): each stopped session reported back that
   it had ended, and handling that preserved its file.
+- The Serial Monitor dialog (Plugins menu) stays on top of LogSquirl's
+  window, and no longer keeps LogSquirl running when it is open while the
+  main window is closed.
 - Deleting the dialog with sessions still running no longer calls back
   into the half-destroyed dialog.
 - Starting, stopping and rotating never truncate an existing log file.

@@ -23,6 +23,7 @@ add_executable(logsquirl_serial_tests
     takelines_test.cpp
     portwidget_test.cpp
     generatelogpath_test.cpp
+    plugin_test.cpp
 )
 
 set_target_properties(logsquirl_serial_tests PROPERTIES

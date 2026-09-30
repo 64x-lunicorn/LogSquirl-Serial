@@ -47,8 +47,10 @@
 #include "serialprocess.h"
 #include "sidebarwidget.h"
 
+#include <QApplication>
 #include <QInputDialog>
 #include <QSettings>
+#include <QWindow>
 
 // ── Global state ─────────────────────────────────────────────────────────
 
@@ -95,9 +97,21 @@ static void showSerialDialog( void* /* userData */ )
     if ( !serial_monitor::g_state.dialog ) {
         serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
     }
-    serial_monitor::g_state.dialog->show();
-    serial_monitor::g_state.dialog->raise();
-    serial_monitor::g_state.dialog->activateWindow();
+    auto* dialog = serial_monitor::g_state.dialog;
+
+    // The dialog is created parentless in init() and deleted in shutdown(),
+    // so it must not become a child of a main window that may be destroyed
+    // first.  A transient parent keeps it on top of the window whose menu
+    // opened it, without handing over ownership.
+    auto* window = QApplication::activeWindow();
+    if ( window && window != dialog ) {
+        dialog->winId(); // creates the native window, and so windowHandle()
+        dialog->windowHandle()->setTransientParent( window->windowHandle() );
+    }
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 // ── Exported C entry points ──────────────────────────────────────────────
