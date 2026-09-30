@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lone `\r` now ends a line. A stream that never ends its lines (binary
   data, a progress display) is written out every 64 KiB instead of
   growing the read buffer without bound.
+- A session whose port cannot be opened is no longer listed as active:
+  the error is shown once, no tab is opened, and no empty log file is left
+  behind.
 
 ## [0.5.0] — 2026-06-22
 

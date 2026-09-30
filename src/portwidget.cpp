@@ -290,35 +290,30 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
 
     auto* proc = new SerialProcess( config, savePath, this );
 
-    connect( proc, &SerialProcess::started, this, [ this, name ]() {
-        hostLog( LOGSQUIRL_LOG_INFO, "Serial session started for " + name );
-    } );
-
     connect( proc, &SerialProcess::finished, this,
              [ this, name ]() { onSessionFinished( name ); } );
 
     connect( proc, &SerialProcess::errorOccurred, this,
              [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
 
-    proc->start();
-
-    if ( proc->isRunning() || !proc->tempFilePath().isEmpty() ) {
-        sessions_.insert( name, proc );
-
-        if ( g_state.api && g_state.handle ) {
-            const auto path = proc->tempFilePath().toUtf8();
-            g_state.api->open_file( g_state.handle, path.constData(), 1 );
-            hostNotify( QString( "Serial capture started for %1 at %2 baud" )
-                            .arg( name )
-                            .arg( config.baudRate ) );
-        }
-
-        refreshPorts();
-        return true;
+    if ( !proc->start() ) {
+        // start() has reported why through errorOccurred()
+        delete proc;
+        return false;
     }
 
-    delete proc;
-    return false;
+    sessions_.insert( name, proc );
+
+    // Ask the host to open the log file in a follow-mode tab
+    if ( g_state.api && g_state.handle ) {
+        const auto path = proc->tempFilePath().toUtf8();
+        g_state.api->open_file( g_state.handle, path.constData(), 1 );
+    }
+    hostNotify(
+        QString( "Serial capture started for %1 at %2 baud" ).arg( name ).arg( config.baudRate ) );
+
+    refreshPorts(); // Update combo box markers
+    return true;
 }
 
 void PortWidget::stopSession( const QString& portName )
@@ -415,40 +410,7 @@ void PortWidget::startCapture()
                               ? savePathEdit_->text()
                               : QString();
 
-    auto config = buildConfig();
-    auto* proc = new SerialProcess( config, savePath, this );
-
-    connect( proc, &SerialProcess::started, this, [ this, name ]() {
-        hostLog( LOGSQUIRL_LOG_INFO, "Serial session started for " + name );
-    } );
-
-    connect( proc, &SerialProcess::finished, this,
-             [ this, name ]() { onSessionFinished( name ); } );
-
-    connect( proc, &SerialProcess::errorOccurred, this,
-             [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
-
-    proc->start();
-
-    if ( proc->isRunning() || !proc->tempFilePath().isEmpty() ) {
-        sessions_.insert( name, proc );
-
-        // Ask the host to open the temp file in a follow-mode tab
-        if ( g_state.api && g_state.handle ) {
-            const auto path = proc->tempFilePath().toUtf8();
-            g_state.api->open_file( g_state.handle, path.constData(), 1 );
-        }
-
-        // Notify via host notification
-        hostNotify( QString( "Serial capture started for %1 at %2 baud" )
-                        .arg( name )
-                        .arg( config.baudRate ) );
-    }
-    else {
-        delete proc;
-    }
-
-    refreshPorts();
+    startSession( buildConfig(), savePath );
 }
 
 void PortWidget::stopCapture()

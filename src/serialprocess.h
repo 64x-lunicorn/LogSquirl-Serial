@@ -37,8 +37,8 @@
  *   cfg.portName = "/dev/ttyUSB0";
  *   cfg.baudRate = 115200;
  *   auto* proc = new SerialProcess( cfg, "/optional/save.log", parent );
- *   proc->start();                    // opens serial port
- *   qDebug() << proc->tempFilePath(); // LogSquirl opens this file
+ *   if ( proc->start() )              // opens serial port
+ *       qDebug() << proc->tempFilePath(); // LogSquirl opens this file
  *   proc->stop();                     // closes port
  */
 
@@ -167,8 +167,16 @@ public:
 
     // ── Instance methods ─────────────────────────────────────────────
 
-    /** Open the serial port and start reading.  No-op if already running. */
-    void start();
+    /**
+     * Open the log file and the serial port and start reading.  No-op if
+     * already running.
+     *
+     * On failure the reason has been emitted through errorOccurred(), and
+     * a log file that start() created is removed again.
+     *
+     * @return true if the port is open, false if the session did not start.
+     */
+    bool start();
 
     /** Close the serial port.  No-op if not running. */
     void stop();
@@ -272,6 +280,9 @@ private:
     /** Write out a buffered partial line, e.g. before the file is closed. */
     void flushPartialLine();
 
+    /** Close the log file after a failed start; remove it if start() created it. */
+    void discardLogFile();
+
     SerialConfig config_;
     QString savePath_;
 
@@ -280,8 +291,9 @@ private:
     QFile tempFile_;
     QByteArray readBuffer_; ///< Accumulates partial lines from the port.
     qint64 lineCount_ = 0;
-    int rotationCount_ = 0;      ///< Incremented on each rotateLog() call.
-    bool usingSavePath_ = false; ///< True when writing directly to the log directory.
+    int rotationCount_ = 0;       ///< Incremented on each rotateLog() call.
+    bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
+    bool createdLogFile_ = false; ///< True when start() created the log file.
 };
 
 } // namespace serial_monitor

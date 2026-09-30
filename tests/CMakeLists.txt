@@ -21,6 +21,7 @@ add_executable(logsquirl_serial_tests
     serialprocess_test.cpp
     hostapi_test.cpp
     takelines_test.cpp
+    portwidget_test.cpp
 )
 
 set_target_properties(logsquirl_serial_tests PROPERTIES

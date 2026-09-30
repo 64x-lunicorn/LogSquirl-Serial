@@ -152,39 +152,36 @@ SerialConfig SerialProcess::defaultConfig()
 
 // ── Instance: start / stop ──────────────────────────────────────────────
 
-void SerialProcess::start()
+bool SerialProcess::start()
 {
     if ( isRunning() ) {
-        return;
+        return true;
     }
 
     // When a save path is configured, write directly to the log directory
     // instead of creating a temporary file.  This avoids accumulating
     // orphaned temp files and ensures the user's log directory is used.
+    QString path;
     if ( !savePath_.isEmpty() ) {
         QDir().mkpath( QFileInfo( savePath_ ).absolutePath() );
-        tempFile_.setFileName( savePath_ );
-        if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
-            Q_EMIT errorOccurred( "Failed to open log file: " + tempFile_.errorString() );
-            return;
-        }
-        usingSavePath_ = true;
+        path = savePath_;
     }
     else {
         if ( !tempDir_.isValid() ) {
             Q_EMIT errorOccurred( "Failed to create temporary directory." );
-            return;
+            return false;
         }
-
-        // Open the temporary file for writing
-        const auto tempPath = tempDir_.path() + "/serial_" + config_.portName + ".log";
-        tempFile_.setFileName( tempPath );
-        if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
-            Q_EMIT errorOccurred( "Failed to open temp file: " + tempFile_.errorString() );
-            return;
-        }
-        usingSavePath_ = false;
+        path = tempDir_.path() + "/serial_" + config_.portName + ".log";
     }
+
+    createdLogFile_ = !QFileInfo::exists( path );
+    tempFile_.setFileName( path );
+    if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+        Q_EMIT errorOccurred( "Failed to open log file: " + tempFile_.errorString() );
+        tempFile_.setFileName( {} );
+        return false;
+    }
+    usingSavePath_ = !savePath_.isEmpty();
 
     lineCount_ = 0;
     readBuffer_.clear();
@@ -200,13 +197,14 @@ void SerialProcess::start()
     if ( !port_.open( QIODevice::ReadWrite ) ) {
         Q_EMIT errorOccurred(
             QString( "Failed to open port %1: %2" ).arg( config_.portName, port_.errorString() ) );
-        tempFile_.close();
-        return;
+        discardLogFile();
+        return false;
     }
 
     hostLog( LOGSQUIRL_LOG_INFO,
              QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
     Q_EMIT started();
+    return true;
 }
 
 void SerialProcess::stop()
@@ -339,6 +337,15 @@ void SerialProcess::writeLine( const QByteArray& line )
     ++lineCount_;
 }
 
+void SerialProcess::discardLogFile()
+{
+    tempFile_.close();
+    if ( createdLogFile_ ) {
+        tempFile_.remove();
+    }
+    tempFile_.setFileName( {} );
+}
+
 void SerialProcess::flushPartialLine()
 {
     if ( readBuffer_.isEmpty() ) {
@@ -368,15 +375,16 @@ void SerialProcess::onReadyRead()
 
 void SerialProcess::onPortError( QSerialPort::SerialPortError error )
 {
-    // NoError is emitted on successful operations — ignore it
-    if ( error == QSerialPort::NoError ) {
+    // NoError is emitted on successful operations — ignore it.  While the
+    // port is not open, the error comes from open(), and start() reports it.
+    if ( error == QSerialPort::NoError || !port_.isOpen() ) {
         return;
     }
 
-    const auto msg
-        = QString( "Serial port error on %1: %2" ).arg( config_.portName, port_.errorString() );
-    hostLog( LOGSQUIRL_LOG_ERROR, msg );
-    Q_EMIT errorOccurred( msg );
+    // The receiver logs and shows the message; logging it here as well
+    // would report every error twice.
+    Q_EMIT errorOccurred(
+        QString( "Serial port error on %1: %2" ).arg( config_.portName, port_.errorString() ) );
 }
 
 } // namespace serial_monitor

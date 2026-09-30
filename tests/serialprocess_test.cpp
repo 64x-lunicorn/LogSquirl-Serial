@@ -22,16 +22,46 @@
  * @brief BDD tests for SerialProcess instance behaviour.
  *
  * Tests basic construction, property accessors, default configuration,
- * and configDir fallback without requiring real serial hardware.
+ * and configDir fallback without requiring real serial hardware.  The
+ * scenarios that need an open port use a pseudo-terminal as the device
+ * (see pseudoterminal.h) and only run on Unix.
  */
 
 #include <catch2/catch.hpp>
 
+#include "fakehost.h"
 #include "plugin.h"
+#include "pseudoterminal.h"
 #include "serialprocess.h"
+
+#include <QFile>
+#include <QTemporaryDir>
 
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;
+using serial_test::FakeHost;
+using serial_test::waitFor;
+
+namespace {
+
+/// A port name that exists on no system.
+const QString kMissingPort = "logsquirl-test-no-such-port";
+
+QByteArray readFile( const QString& path )
+{
+    QFile file( path );
+    return file.open( QIODevice::ReadOnly ) ? file.readAll() : QByteArray();
+}
+
+SerialConfig configFor( const QString& portName )
+{
+    SerialConfig cfg;
+    cfg.portName = portName;
+    cfg.timestamps = false; // keep the file content predictable
+    return cfg;
+}
+
+} // namespace
 
 SCENARIO( "SerialProcess construction and properties", "[serialprocess]" )
 {
@@ -156,4 +186,90 @@ SCENARIO( "rotateLog creates a new temp file and preserves the old one", "[seria
             REQUIRE( proc.lineCount() == 0 );
         }
     }
+}
+
+SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
+{
+    GIVEN( "a port that does not exist" )
+    {
+        FakeHost host;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+
+        SerialProcess proc( configFor( kMissingPort ), savePath );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "starting the session" )
+        {
+            const auto started = proc.start();
+
+            THEN( "start() fails and the session is not running" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE_FALSE( proc.isRunning() );
+            }
+
+            THEN( "the failure is reported exactly once" )
+            {
+                REQUIRE( errors.size() == 1 );
+            }
+
+            THEN( "no empty log file is left behind" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( savePath ) );
+                REQUIRE( proc.tempFilePath().isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a port that does not exist and a save path that already holds a capture" )
+    {
+        FakeHost host;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        {
+            QFile existing( savePath );
+            REQUIRE( existing.open( QIODevice::WriteOnly ) );
+            existing.write( "earlier capture\n" );
+        }
+
+        SerialProcess proc( configFor( kMissingPort ), savePath );
+
+        WHEN( "starting the session fails" )
+        {
+            REQUIRE_FALSE( proc.start() );
+
+            THEN( "the earlier capture is kept" )
+            {
+                REQUIRE( QFileInfo::exists( savePath ) );
+            }
+        }
+    }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "a device on a working port" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+
+        SerialProcess proc( configFor( device.devicePath() ), logDir.filePath( "capture.log" ) );
+
+        WHEN( "starting the session" )
+        {
+            const auto started = proc.start();
+
+            THEN( "start() succeeds and the device's output reaches the log file" )
+            {
+                REQUIRE( started );
+                REQUIRE( proc.isRunning() );
+                REQUIRE( device.send( "first\r\nsecond\n" ) );
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
+                REQUIRE( readFile( proc.tempFilePath() ) == "first\nsecond\n" );
+            }
+        }
+    }
+#endif
 }
