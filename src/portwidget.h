@@ -133,6 +133,9 @@ public:
      */
     bool sendToSession( const QString& portName, const QByteArray& data, TxLineEnding lineEnding );
 
+    /** Set the serial settings to the saved defaults (baud rate, timestamps). */
+    void loadDefaults();
+
 private Q_SLOTS:
     /** Re-scan for serial ports and update the combo box. */
     void refreshPorts();

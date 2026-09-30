@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the selected port has none; it says so instead. Its send controls
   are only enabled for a selected port with a running capture, as in the
   dialog.
+- Plugins → Configure showed the timestamp default but offered no way to
+  change it. It is now a proper dialog with the default baud rate and a
+  "Prepend timestamp to each line" checkbox, and applies both to the open
+  Serial panels right away.
 - The Serial Monitor dialog (Plugins menu) stays on top of LogSquirl's
   window, and no longer keeps LogSquirl running when it is open while the
   main window is closed.

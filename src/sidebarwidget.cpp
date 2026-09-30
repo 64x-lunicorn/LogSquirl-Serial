@@ -123,6 +123,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     settingsLayout->addRow( "Flow:", flowControlCombo_ );
 
     timestampCheckBox_ = new QCheckBox( "Timestamps", this );
+    timestampCheckBox_->setObjectName( "timestamps" );
     timestampCheckBox_->setChecked( true );
     timestampCheckBox_->setToolTip( "Add [YYYY-MM-DD HH:mm:ss.zzz] prefix to each line" );
     settingsLayout->addRow( timestampCheckBox_ );
@@ -231,12 +232,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     connect( portCombo_, &QComboBox::currentIndexChanged, this, [ this ]() { updateUiState(); } );
 
     // Load defaults from config
-    const auto defaults = SerialProcess::defaultConfig();
-    const auto baudIdx = baudCombo_->findData( defaults.baudRate );
-    if ( baudIdx >= 0 ) {
-        baudCombo_->setCurrentIndex( baudIdx );
-    }
-    timestampCheckBox_->setChecked( defaults.timestamps );
+    loadDefaults();
 
     // Periodic refresh of line counts (every 1 second)
     refreshTimer_ = new QTimer( this );
@@ -401,6 +397,16 @@ QString SidebarWidget::currentPortName() const
 {
     const auto data = portCombo_->currentData();
     return data.isValid() ? data.toString() : QString();
+}
+
+void SidebarWidget::loadDefaults()
+{
+    const auto defaults = SerialProcess::defaultConfig();
+    const auto baudIdx = baudCombo_->findData( defaults.baudRate );
+    if ( baudIdx >= 0 ) {
+        baudCombo_->setCurrentIndex( baudIdx );
+    }
+    timestampCheckBox_->setChecked( defaults.timestamps );
 }
 
 SerialConfig SidebarWidget::buildConfig() const

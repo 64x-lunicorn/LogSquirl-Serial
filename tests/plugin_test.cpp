@@ -32,6 +32,10 @@
 #include "portwidget.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QDialog>
+#include <QSettings>
+#include <QTimer>
 #include <QWidget>
 #include <QWindow>
 
@@ -40,6 +44,7 @@ using serial_test::waitFor;
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
 extern "C" void logsquirl_plugin_shutdown( void );
+extern "C" void logsquirl_plugin_configure( void* parent_widget );
 
 SCENARIO( "the Serial Monitor dialog belongs to LogSquirl's window", "[plugin]" )
 {
@@ -81,5 +86,53 @@ SCENARIO( "the Serial Monitor dialog belongs to LogSquirl's window", "[plugin]" 
 
         logsquirl_plugin_shutdown();
         REQUIRE( serial_monitor::g_state.dialog == nullptr );
+    }
+}
+
+SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
+{
+    GIVEN( "an initialised plugin with timestamps on by default" )
+    {
+        FakeHost host;
+        REQUIRE(
+            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
+            == 0 );
+
+        WHEN( "the user turns timestamps off in Plugins → Configure" )
+        {
+            bool foundCheckBox = false;
+            QTimer::singleShot( 0, [ &foundCheckBox ]() {
+                auto* dialog = qobject_cast<QDialog*>( QApplication::activeModalWidget() );
+                if ( !dialog ) {
+                    return;
+                }
+                if ( auto* timestamps = dialog->findChild<QCheckBox*>() ) {
+                    foundCheckBox = true;
+                    timestamps->setChecked( false );
+                    dialog->accept();
+                }
+                else {
+                    dialog->reject();
+                }
+            } );
+            logsquirl_plugin_configure( nullptr );
+
+            THEN( "the dialog offers the setting and saves it" )
+            {
+                REQUIRE( foundCheckBox );
+                QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
+                REQUIRE_FALSE( settings.value( "serial/timestamps", true ).toBool() );
+            }
+
+            THEN( "the open Serial Monitor dialog takes it over" )
+            {
+                auto* dialogTimestamps
+                    = serial_monitor::g_state.dialog->findChild<QCheckBox*>( "timestamps" );
+                REQUIRE( dialogTimestamps );
+                REQUIRE_FALSE( dialogTimestamps->isChecked() );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
     }
 }

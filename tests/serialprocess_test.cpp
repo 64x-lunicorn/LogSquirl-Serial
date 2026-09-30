@@ -35,6 +35,7 @@
 #include "serialprocess.h"
 
 #include <QFile>
+#include <QSettings>
 #include <QTemporaryDir>
 
 using serial_monitor::SerialConfig;
@@ -112,8 +113,9 @@ SCENARIO( "SerialProcess construction and properties", "[serialprocess]" )
 
 SCENARIO( "defaultConfig returns sensible defaults", "[serialprocess]" )
 {
-    GIVEN( "the defaultConfig static function" )
+    GIVEN( "a plugin config directory without saved defaults" )
     {
+        FakeHost host;
         const auto cfg = SerialProcess::defaultConfig();
 
         THEN( "the baud rate is 115200" )
@@ -144,6 +146,30 @@ SCENARIO( "defaultConfig returns sensible defaults", "[serialprocess]" )
         THEN( "timestamps are enabled by default" )
         {
             REQUIRE( cfg.timestamps == true );
+        }
+    }
+}
+
+SCENARIO( "defaultConfig applies the saved defaults", "[serialprocess]" )
+{
+    GIVEN( "defaults saved through the Configure dialog" )
+    {
+        FakeHost host;
+        {
+            QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
+            settings.setValue( "serial/defaultBaud", 9600 );
+            settings.setValue( "serial/timestamps", false );
+        }
+
+        WHEN( "reading the default configuration" )
+        {
+            const auto cfg = SerialProcess::defaultConfig();
+
+            THEN( "the saved baud rate and timestamp setting are used" )
+            {
+                REQUIRE( cfg.baudRate == 9600 );
+                REQUIRE_FALSE( cfg.timestamps );
+            }
         }
     }
 }

@@ -71,6 +71,9 @@ public:
      */
     explicit SidebarWidget( PortWidget* portWidget, QWidget* parent = nullptr );
 
+    /** Set the serial settings to the saved defaults (baud rate, timestamps). */
+    void loadDefaults();
+
 private Q_SLOTS:
     /** Re-scan for serial ports and update the combo box. */
     void refreshPorts();

@@ -48,8 +48,12 @@
 #include "sidebarwidget.h"
 
 #include <QApplication>
-#include <QInputDialog>
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QSettings>
+#include <QSpinBox>
 #include <QWindow>
 
 // ── Global state ─────────────────────────────────────────────────────────
@@ -204,30 +208,53 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
  *
  * @param parent_widget  Cast of a QWidget* the plugin can use as dialog parent.
  *
- * Lets the user change the default baud rate and timestamp preference.
+ * Lets the user change the default baud rate and whether lines are
+ * timestamped, and applies them to the open Serial Monitor panels.
  */
 LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
 {
     auto* parent = static_cast<QWidget*>( parent_widget );
+    const auto defaults = serial_monitor::SerialProcess::defaultConfig();
+
+    QDialog dialog( parent );
+    dialog.setWindowTitle( "Configure Serial Monitor" );
+    auto* layout = new QFormLayout( &dialog );
+
+    auto* baudSpin = new QSpinBox( &dialog );
+    baudSpin->setRange( 300, 4000000 );
+    baudSpin->setValue( defaults.baudRate );
+    layout->addRow( "Default baud rate:", baudSpin );
+
+    auto* timestampCheckBox = new QCheckBox( "Prepend timestamp to each line", &dialog );
+    timestampCheckBox->setChecked( defaults.timestamps );
+    layout->addRow( timestampCheckBox );
+
+    auto* buttons
+        = new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog );
+    QObject::connect( buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept );
+    QObject::connect( buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject );
+    layout->addRow( buttons );
+
+    if ( dialog.exec() != QDialog::Accepted ) {
+        return;
+    }
 
     const auto configDir = serial_monitor::SerialProcess::configDir();
     QSettings settings( configDir + "/serial.ini", QSettings::IniFormat );
-    const auto currentBaud = settings.value( "serial/defaultBaud", 115200 ).toInt();
-    const auto currentTimestamps = settings.value( "serial/timestamps", true ).toBool();
+    settings.setValue( "serial/defaultBaud", baudSpin->value() );
+    settings.setValue( "serial/timestamps", timestampCheckBox->isChecked() );
+    settings.sync();
+    serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
+                             QString( "Default baud rate set to %1, timestamps %2" )
+                                 .arg( baudSpin->value() )
+                                 .arg( timestampCheckBox->isChecked() ? "on" : "off" ) );
 
-    const auto prompt = QString( "Default baud rate: %1\nTimestamps: %2\n\n"
-                                 "Enter new default baud rate (leave empty to keep %1):" )
-                            .arg( currentBaud )
-                            .arg( currentTimestamps ? "enabled" : "disabled" );
-
-    bool ok = false;
-    const auto newBaud = QInputDialog::getInt( parent, "Configure Serial Monitor", prompt,
-                                               currentBaud, 300, 4000000, 1, &ok );
-
-    if ( ok ) {
-        settings.setValue( "serial/defaultBaud", newBaud );
-        serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
-                                 QString( "Default baud rate set to %1" ).arg( newBaud ) );
+    // Show the new defaults in the open panels
+    if ( serial_monitor::g_state.dialog ) {
+        serial_monitor::g_state.dialog->loadDefaults();
+    }
+    if ( serial_monitor::g_state.sidebarWidget ) {
+        serial_monitor::g_state.sidebarWidget->loadDefaults();
     }
 }
 
