@@ -42,6 +42,7 @@
  */
 
 #include "portwidget.h"
+#include "baudrate.h"
 #include "plugin.h"
 
 #include <QFileDialog>
@@ -90,12 +91,7 @@ PortWidget::PortWidget( QWidget* parent )
     auto* settingsLayout = new QFormLayout( settingsGroup );
 
     baudCombo_ = new QComboBox( this );
-    const QList<int> baudRates
-        = { 300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 };
-    for ( const auto rate : baudRates ) {
-        baudCombo_->addItem( QString::number( rate ), rate );
-    }
-    baudCombo_->setCurrentIndex( baudCombo_->findData( 115200 ) );
+    initBaudRateCombo( baudCombo_ );
     settingsLayout->addRow( "Baud rate:", baudCombo_ );
 
     dataBitsCombo_ = new QComboBox( this );
@@ -284,6 +280,15 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
 {
     const auto& name = config.portName;
     if ( name.isEmpty() || sessions_.contains( name ) ) {
+        return false;
+    }
+
+    // The baud rate combo is editable, so its text may not be a rate.
+    if ( config.baudRate <= 0 ) {
+        const auto message
+            = QString( "Serial capture not started for %1: invalid baud rate." ).arg( name );
+        hostLog( LOGSQUIRL_LOG_WARNING, message );
+        hostNotify( message );
         return false;
     }
 
@@ -548,9 +553,8 @@ QString PortWidget::currentPortName() const
 void PortWidget::loadDefaults()
 {
     const auto defaults = SerialProcess::defaultConfig();
-    const auto baudIdx = baudCombo_->findData( defaults.baudRate );
-    if ( baudIdx >= 0 ) {
-        baudCombo_->setCurrentIndex( baudIdx );
+    if ( defaults.baudRate > 0 ) {
+        selectBaudRate( baudCombo_, defaults.baudRate );
     }
     timestampCheckBox_->setChecked( defaults.timestamps );
 }
@@ -559,7 +563,7 @@ SerialConfig PortWidget::buildConfig() const
 {
     SerialConfig cfg;
     cfg.portName = currentPortName();
-    cfg.baudRate = baudCombo_->currentData().toInt();
+    cfg.baudRate = baudRateFrom( baudCombo_ );
     cfg.dataBits = static_cast<QSerialPort::DataBits>( dataBitsCombo_->currentData().toInt() );
     cfg.stopBits = static_cast<QSerialPort::StopBits>( stopBitsCombo_->currentData().toInt() );
     cfg.parity = static_cast<QSerialPort::Parity>( parityCombo_->currentData().toInt() );

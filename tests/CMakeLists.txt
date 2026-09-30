@@ -25,6 +25,7 @@ add_executable(logsquirl_serial_tests
     generatelogpath_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    baudrate_test.cpp
 )
 
 set_target_properties(logsquirl_serial_tests PROPERTIES
@@ -56,6 +57,7 @@ target_sources(logsquirl_serial_tests
         "${CMAKE_SOURCE_DIR}/src/serialprocess.cpp"
         "${CMAKE_SOURCE_DIR}/src/portwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
+        "${CMAKE_SOURCE_DIR}/src/baudrate.cpp"
 )
 
 add_test(NAME logsquirl_serial_tests COMMAND logsquirl_serial_tests)

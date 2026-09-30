@@ -40,6 +40,7 @@ add_library(logsquirl_serial SHARED
     src/serialprocess.cpp
     src/portwidget.cpp
     src/sidebarwidget.cpp
+    src/baudrate.cpp
 )
 
 # Qt MOC needs to know about our Q_OBJECT classes

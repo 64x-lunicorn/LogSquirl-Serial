@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change it. It is now a proper dialog with the default baud rate and a
   "Prepend timestamp to each line" checkbox, and applies both to the open
   Serial panels right away.
+- A default baud rate set in Plugins → Configure that is not one of the
+  listed rates (e.g. 250000) was silently ignored. It is now added to the
+  list and selected. The baud rate boxes also accept any typed positive
+  rate, and a session with an invalid rate is refused with a message.
 - The Serial Monitor dialog (Plugins menu) stays on top of LogSquirl's
   window, and no longer keeps LogSquirl running when it is open while the
   main window is closed.
