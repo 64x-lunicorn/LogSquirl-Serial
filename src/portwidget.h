@@ -72,12 +72,21 @@ public:
     explicit PortWidget( QWidget* parent = nullptr );
     ~PortWidget() override = default;
 
-    /** Stop all active sessions.
-     *  @param cleanupTempFiles  If true, temporary log files are removed
-     *         (used during plugin shutdown).  If false, they are preserved
-     *         so that already-open tabs can still display the data.
+    /** What stopAll() does with the sessions' temporary log files. */
+    enum class TempFiles {
+        Keep,  ///< Keep them for the tabs that show them.
+        Remove ///< Remove them, including those of rotated and ended sessions.
+    };
+
+    /**
+     * Stop all active serial sessions.
+     *
+     * @param tempFiles  TempFiles::Remove only when LogSquirl quits: then
+     *         the tabs showing the files close too.  When the plugin is
+     *         disabled or updated at runtime, its tabs stay open, and the
+     *         files must be kept.
      */
-    void stopAll( bool cleanupTempFiles = false );
+    void stopAll( TempFiles tempFiles = TempFiles::Keep );
 
     /** Number of currently running sessions. */
     int activeSessionCount() const;
@@ -98,6 +107,7 @@ public:
      *
      * @param config    Serial port configuration.
      * @param savePath  Optional path to a .log file for persistent saving.
+     *                  Refused if another active session writes to it.
      * @return true if the session started successfully, false otherwise.
      */
     bool startSession( const SerialConfig& config, const QString& savePath = {} );
@@ -132,10 +142,29 @@ public:
      */
     bool sendToSession( const QString& portName, const QByteArray& data, TxLineEnding lineEnding );
 
-private Q_SLOTS:
-    /** Re-scan for serial ports and update the combo box. */
+    /** Set the serial settings to the saved defaults (baud rate, timestamps). */
+    void loadDefaults();
+
+    /** Names of the ports found by the most recent scan. */
+    const QStringList& ports() const
+    {
+        return ports_;
+    }
+
+public Q_SLOTS:
+    /**
+     * Re-scan for serial ports.  The enumeration blocks, so it only runs
+     * when asked for (Refresh, a session ending) and at construction, not
+     * on every start and stop; portsChanged() is emitted when ports() is
+     * updated.
+     */
     void refreshPorts();
 
+Q_SIGNALS:
+    /** Emitted when a port scan has finished and ports() is updated. */
+    void portsChanged();
+
+private Q_SLOTS:
     /** Start capture for the currently selected port. */
     void startCapture();
 
@@ -161,8 +190,31 @@ private:
     /** Update UI state (button enable/disable, status label). */
     void updateUiState();
 
+    /** Refill the port combo box from ports(), marking active sessions. */
+    void updatePortCombo();
+
+    /** Store the result of a scan and announce it. */
+    void setPorts( const QStringList& ports );
+
     /** Return the port name of the currently selected entry, or empty. */
     QString currentPortName() const;
+
+    /**
+     * Remove the session for @p portName from the active sessions and cut
+     * its signals to this widget.  The caller stops and deletes it.
+     *
+     * @return The session, or nullptr if there is none for @p portName.
+     */
+    SerialProcess* takeSession( const QString& portName );
+
+    /**
+     * Keep the temporary files of a session that has ended for its tabs,
+     * and remember them, so that stopAll( TempFiles::Remove ) removes them.
+     */
+    void keepTempFiles( SerialProcess* proc );
+
+    /** Whether an active session writes to the file at @p path. */
+    bool isFileInUse( const QString& path ) const;
 
     /** Build a SerialConfig from the current UI selections. */
     SerialConfig buildConfig() const;
@@ -198,7 +250,12 @@ private:
     QLabel* statusLabel_ = nullptr;
 
     // ── Active sessions (portName → SerialProcess*) ─────────────────
+    QStringList ports_; ///< Result of the last port scan.
+
     QMap<QString, SerialProcess*> sessions_;
+
+    /// Temporary directories of ended sessions, kept for their tabs until shutdown.
+    QStringList endedTempDirs_;
 };
 
 } // namespace serial_monitor

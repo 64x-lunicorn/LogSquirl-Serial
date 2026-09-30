@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Log messages and notifications reach LogSquirl as UTF-8, so non-ASCII
+  port names and paths are no longer garbled on systems whose local
+  8-bit encoding is not UTF-8.
+- Lines ending in `\r\n` no longer keep a stray carriage return, and a
+  lone `\r` now ends a line, as soon as it arrives. A stream that never ends its lines (binary
+  data, a progress display) is written out every 64 KiB instead of
+  growing the read buffer without bound.
+- A session whose port cannot be opened is no longer listed as active:
+  the error is shown once, no tab is opened, and no empty log file is left
+  behind.
+- Temporary log files are now removed when LogSquirl quits: those of the
+  running sessions and of every session that was stopped, ended or
+  rotated away before, whose tabs close with LogSquirl. When the plugin is
+  disabled or updated while LogSquirl keeps running, its sessions are
+  stopped but every file is kept, since open tabs may still show them.
+  0.4.0's cleanup never took effect: each session stopped at shutdown
+  reported back that it had ended, and handling that preserved its file,
+  while the files of earlier and rotated sessions were never removed at
+  all. Save paths and files in the log directory are never removed.
+- Starting or stopping a capture no longer enumerates the serial ports,
+  which blocks the UI, up to twice per click (once for the dialog, once
+  for the sidebar). The dialog and sidebar now share one port list, which
+  is rescanned at startup, on Refresh and when a session ends by itself.
+- Unplugging a device ends its session: it is removed from the list and
+  the user is told the device was disconnected. Before, the session stayed
+  listed as active, capturing nothing.
+- The sidebar no longer sends a command to some other running capture
+  when the selected port has none; it says so instead. Its send controls
+  are only enabled for a selected port with a running capture, as in the
+  dialog.
+- Plugins → Configure showed the timestamp default but offered no way to
+  change it. It is now a proper dialog with the default baud rate and a
+  "Prepend timestamp to each line" checkbox, and applies both to the open
+  Serial panels right away.
+- A default baud rate set in Plugins → Configure that is not one of the
+  listed rates (e.g. 250000) was silently ignored. It is now added to the
+  list and selected. The baud rate boxes also accept any positive rate
+  typed as plain digits (in every locale, so "250.000" is not mistaken
+  for a rate), and a session with an invalid rate is refused with a message.
+- The Serial Monitor dialog (Plugins menu) stays on top of LogSquirl's
+  window, and no longer keeps LogSquirl running when it is open while the
+  main window is closed.
+- Deleting the dialog with sessions still running no longer calls back
+  into the half-destroyed dialog.
+- Starting, stopping and rotating never truncate an existing log file.
+  A save path is appended to, so Stop and Start with the dialog's fixed
+  save path keep the earlier capture; generated file names get a `_2`,
+  `_3`, … suffix when a file of that name exists, so a rotation within the
+  same second as the start no longer wipes the capture it rotates away
+  from.
+- A rotation that cannot create its new file no longer leaves the session
+  running with its log file closed, which silently dropped all further
+  output: the capture continues in the old file and the error is shown.
+- A second session is refused instead of writing into the save path of
+  one that is still running.
+- A port given as a device path (`/dev/ttyUSB0`) gets a valid temporary
+  file name: the port name is sanitised, as it already was for files in
+  the log directory.
+
 ## [0.5.0] — 2026-06-22
 
 ### Added

@@ -37,13 +37,14 @@
  *   cfg.portName = "/dev/ttyUSB0";
  *   cfg.baudRate = 115200;
  *   auto* proc = new SerialProcess( cfg, "/optional/save.log", parent );
- *   proc->start();                    // opens serial port
- *   qDebug() << proc->tempFilePath(); // LogSquirl opens this file
+ *   if ( proc->start() )              // opens serial port
+ *       qDebug() << proc->tempFilePath(); // LogSquirl opens this file
  *   proc->stop();                     // closes port
  */
 
 #pragma once
 
+#include <QDateTime>
 #include <QFile>
 #include <QObject>
 #include <QSerialPort>
@@ -107,6 +108,8 @@ public:
      */
     explicit SerialProcess( const SerialConfig& config, const QString& savePath = {},
                             QObject* parent = nullptr );
+
+    /** Closes the port without emitting any signal. */
     ~SerialProcess() override;
 
     // ── Static helpers ───────────────────────────────────────────────
@@ -132,10 +135,54 @@ public:
      */
     static QStringList filterPorts( const QList<QSerialPortInfo>& ports );
 
+    /// Longest line takeLines() waits for before forcing it out.
+    static constexpr qsizetype kMaxLineLength = 64 * 1024;
+
+    /**
+     * Remove every complete line from the front of @p buffer and return
+     * the lines, without their terminator.  "\n", "\r\n" and a lone "\r"
+     * all end a line.  A CR ends its line at once, even as the last byte
+     * read, and sets @p afterCr: an LF at the start of the next call is
+     * then the second half of a CRLF pair and is skipped.  An incomplete
+     * last line stays in the buffer until
+     * more data arrives, unless it is longer than @p maxLineLength: then
+     * it is returned as a line of its own, so that a stream that never
+     * ends its lines (binary data, a progress display) cannot make the
+     * buffer grow without bound.
+     *
+     * Extracted as a static helper so unit tests can exercise the line
+     * splitting without real hardware.
+     *
+     * @param buffer         Bytes read so far; complete lines are removed.
+     * @param afterCr        In: whether the data before @p buffer ended with
+     *                       a CR.  Out: whether @p buffer did.  Start with
+     *                       false and keep it for the next call.
+     * @param maxLineLength  Size above which an incomplete line is forced out.
+     * @return The complete lines, in order.
+     */
+    static QList<QByteArray> takeLines( QByteArray& buffer, bool& afterCr,
+                                        qsizetype maxLineLength = kMaxLineLength );
+
     /**
      * Return a sensible default configuration (115200 8N1, no FC, timestamps on).
      */
     static SerialConfig defaultConfig();
+
+    /**
+     * Return a path for a new log file in @p dir, named
+     * `<yyyy-MM-dd_HHmmss>_<port>.log`.  Characters of the port name that
+     * are not valid in file names (the '/' of "/dev/ttyUSB0") are
+     * replaced by '_'.  If that file exists, a number is appended
+     * (`…_2.log`, `…_3.log`, …), so that two captures within the same
+     * second never share a file.
+     *
+     * @param dir        Directory the file will be created in.
+     * @param portName   Serial port name.
+     * @param timestamp  Time the capture starts.
+     * @return Absolute path of a file that does not exist yet.
+     */
+    static QString generateLogPath( const QString& dir, const QString& portName,
+                                    const QDateTime& timestamp = QDateTime::currentDateTime() );
 
     /**
      * Return the plugin's config directory from the host API.
@@ -145,8 +192,19 @@ public:
 
     // ── Instance methods ─────────────────────────────────────────────
 
-    /** Open the serial port and start reading.  No-op if already running. */
-    void start();
+    /**
+     * Open the log file and the serial port and start reading.  No-op if
+     * already running.
+     *
+     * A save path is appended to, so an earlier capture in that file is
+     * never overwritten.
+     *
+     * On failure the reason has been emitted through errorOccurred(), and
+     * a log file that start() created is removed again.
+     *
+     * @return true if the port is open, false if the session did not start.
+     */
+    bool start();
 
     /** Close the serial port.  No-op if not running. */
     void stop();
@@ -167,14 +225,29 @@ public:
      * Prevent the temporary log file from being deleted when this
      * object is destroyed.  Call before deleteLater() so that the
      * LogSquirl tab can keep displaying the captured output.
+     *
+     * @return The temporary directory left on disk, or empty when the
+     *         session writes to a save path (nothing to preserve).
      */
-    void preserveTempFile();
+    QString preserveTempFile();
+
+    /**
+     * Remove the temporary directory now, with the files of every rotation
+     * of this session, even if preserveTempFile() has been called.  For
+     * plugin shutdown, when no tab outlives the host.  Call after stop().
+     * A save path is not in the temporary directory and is kept.
+     */
+    void removeTempFiles();
 
     /**
      * Rotate the log file: close the current temp file and open a new
      * one in the same temp directory.  The old file is preserved so the
      * existing LogSquirl tab keeps its content.  New serial output is
      * redirected to the new file.
+     *
+     * If the new file cannot be created, errorOccurred() is emitted and
+     * the capture continues in the old file; if that cannot be reopened
+     * either, the session is stopped (finished() is emitted).
      *
      * @return Absolute path to the new temp file, or empty on failure.
      */
@@ -240,21 +313,35 @@ private Q_SLOTS:
     /** Handle new data available on the serial port. */
     void onReadyRead();
 
-    /** Handle serial port errors. */
+    /**
+     * Handle serial port errors.  A ResourceError (device unplugged)
+     * stops the session.
+     */
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
+    /** Write one line to the log file, timestamped if configured. */
+    void writeLine( const QByteArray& line );
+
+    /** Write out a buffered partial line, e.g. before the file is closed. */
+    void flushPartialLine();
+
+    /** Close the log file after a failed start; remove it if start() created it. */
+    void discardLogFile();
+
     SerialConfig config_;
     QString savePath_;
 
     QSerialPort port_;
     QTemporaryDir tempDir_;
     QFile tempFile_;
-    QFile saveFile_;
-    QByteArray readBuffer_; ///< Accumulates partial lines from the port.
+    QByteArray readBuffer_;    ///< Accumulates partial lines from the port.
+    bool readAfterCr_ = false; ///< Whether the data read so far ended with a CR.
     qint64 lineCount_ = 0;
-    int rotationCount_ = 0;      ///< Incremented on each rotateLog() call.
-    bool usingSavePath_ = false; ///< True when writing directly to the log directory.
+    int rotationCount_ = 0;       ///< Incremented on each rotateLog() call.
+    bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
+    bool createdLogFile_ = false; ///< True when start() created the log file.
+    bool deviceLost_ = false;     ///< True once the port reported the device gone.
 };
 
 } // namespace serial_monitor

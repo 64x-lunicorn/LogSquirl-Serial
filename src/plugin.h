@@ -38,6 +38,8 @@
 
 #include "logsquirl_plugin_api.h"
 
+#include <QString>
+
 namespace serial_monitor {
 class PortWidget;
 class SidebarWidget;
@@ -58,12 +60,18 @@ struct PluginState {
     PortWidget* dialog = nullptr;           ///< Serial session dialog.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for session control.
     bool initialised = false;               ///< True between init() and shutdown().
+    bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
 };
 
 /// The single global instance — defined in plugin.cpp.
 extern PluginState g_state;
 
 /// Log a message through the host API (no-op if not initialised).
-void hostLog( int level, const char* message );
+/// The host decodes the message as UTF-8.
+void hostLog( int level, const QString& message );
+
+/// Show a host notification (no-op if not initialised).
+/// The host decodes the message as UTF-8.
+void hostNotify( const QString& message );
 
 } // namespace serial_monitor

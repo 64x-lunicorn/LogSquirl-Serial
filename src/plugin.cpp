@@ -47,18 +47,31 @@
 #include "serialprocess.h"
 #include "sidebarwidget.h"
 
-#include <QInputDialog>
+#include <QApplication>
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QSettings>
+#include <QSpinBox>
+#include <QWindow>
 
 // ── Global state ─────────────────────────────────────────────────────────
 
 namespace serial_monitor {
 PluginState g_state;
 
-void hostLog( int level, const char* message )
+void hostLog( int level, const QString& message )
 {
     if ( g_state.api && g_state.handle ) {
-        g_state.api->log_message( g_state.handle, level, message );
+        g_state.api->log_message( g_state.handle, level, message.toUtf8().constData() );
+    }
+}
+
+void hostNotify( const QString& message )
+{
+    if ( g_state.api && g_state.handle ) {
+        g_state.api->show_notification( g_state.handle, message.toUtf8().constData() );
     }
 }
 } // namespace serial_monitor
@@ -88,9 +101,21 @@ static void showSerialDialog( void* /* userData */ )
     if ( !serial_monitor::g_state.dialog ) {
         serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
     }
-    serial_monitor::g_state.dialog->show();
-    serial_monitor::g_state.dialog->raise();
-    serial_monitor::g_state.dialog->activateWindow();
+    auto* dialog = serial_monitor::g_state.dialog;
+
+    // The dialog is created parentless in init() and deleted in shutdown(),
+    // so it must not become a child of a main window that may be destroyed
+    // first.  A transient parent keeps it on top of the window whose menu
+    // opened it, without handing over ownership.
+    auto* window = QApplication::activeWindow();
+    if ( window && window != dialog ) {
+        dialog->winId(); // creates the native window, and so windowHandle()
+        dialog->windowHandle()->setTransientParent( window->windowHandle() );
+    }
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 // ── Exported C entry points ──────────────────────────────────────────────
@@ -128,6 +153,7 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     serial_monitor::g_state.api = api;
     serial_monitor::g_state.handle = handle;
     serial_monitor::g_state.initialised = true;
+    serial_monitor::g_state.quitting = false;
 
     api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
 
@@ -138,6 +164,15 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 
     // Create the PortWidget early so the sidebar panel can reference it.
     serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
+
+    // The host shuts the plugin down both when LogSquirl quits (after
+    // aboutToQuit) and when the plugin is disabled or updated at runtime,
+    // with the tabs left open; only in the first case may the temporary
+    // files go.
+    if ( auto* app = QCoreApplication::instance() ) {
+        QObject::connect( app, &QCoreApplication::aboutToQuit, serial_monitor::g_state.dialog,
+                          []() { serial_monitor::g_state.quitting = true; } );
+    }
 
     // Register a sidebar tab for serial session management
     serial_monitor::g_state.sidebarWidget
@@ -168,7 +203,9 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     }
 
     if ( serial_monitor::g_state.dialog ) {
-        serial_monitor::g_state.dialog->stopAll( true );
+        serial_monitor::g_state.dialog->stopAll(
+            serial_monitor::g_state.quitting ? serial_monitor::PortWidget::TempFiles::Remove
+                                             : serial_monitor::PortWidget::TempFiles::Keep );
         delete serial_monitor::g_state.dialog;
         serial_monitor::g_state.dialog = nullptr;
     }
@@ -183,31 +220,53 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
  *
  * @param parent_widget  Cast of a QWidget* the plugin can use as dialog parent.
  *
- * Lets the user change the default baud rate and timestamp preference.
+ * Lets the user change the default baud rate and whether lines are
+ * timestamped, and applies them to the open Serial Monitor panels.
  */
 LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
 {
     auto* parent = static_cast<QWidget*>( parent_widget );
+    const auto defaults = serial_monitor::SerialProcess::defaultConfig();
+
+    QDialog dialog( parent );
+    dialog.setWindowTitle( "Configure Serial Monitor" );
+    auto* layout = new QFormLayout( &dialog );
+
+    auto* baudSpin = new QSpinBox( &dialog );
+    baudSpin->setRange( 300, 4000000 );
+    baudSpin->setValue( defaults.baudRate );
+    layout->addRow( "Default baud rate:", baudSpin );
+
+    auto* timestampCheckBox = new QCheckBox( "Prepend timestamp to each line", &dialog );
+    timestampCheckBox->setChecked( defaults.timestamps );
+    layout->addRow( timestampCheckBox );
+
+    auto* buttons
+        = new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog );
+    QObject::connect( buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept );
+    QObject::connect( buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject );
+    layout->addRow( buttons );
+
+    if ( dialog.exec() != QDialog::Accepted ) {
+        return;
+    }
 
     const auto configDir = serial_monitor::SerialProcess::configDir();
     QSettings settings( configDir + "/serial.ini", QSettings::IniFormat );
-    const auto currentBaud = settings.value( "serial/defaultBaud", 115200 ).toInt();
-    const auto currentTimestamps = settings.value( "serial/timestamps", true ).toBool();
+    settings.setValue( "serial/defaultBaud", baudSpin->value() );
+    settings.setValue( "serial/timestamps", timestampCheckBox->isChecked() );
+    settings.sync();
+    serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
+                             QString( "Default baud rate set to %1, timestamps %2" )
+                                 .arg( baudSpin->value() )
+                                 .arg( timestampCheckBox->isChecked() ? "on" : "off" ) );
 
-    const auto prompt = QString( "Default baud rate: %1\nTimestamps: %2\n\n"
-                                 "Enter new default baud rate (leave empty to keep %1):" )
-                            .arg( currentBaud )
-                            .arg( currentTimestamps ? "enabled" : "disabled" );
-
-    bool ok = false;
-    const auto newBaud = QInputDialog::getInt( parent, "Configure Serial Monitor", prompt,
-                                               currentBaud, 300, 4000000, 1, &ok );
-
-    if ( ok ) {
-        settings.setValue( "serial/defaultBaud", newBaud );
-        serial_monitor::hostLog(
-            LOGSQUIRL_LOG_INFO,
-            qPrintable( QString( "Default baud rate set to %1" ).arg( newBaud ) ) );
+    // Show the new defaults in the open panels
+    if ( serial_monitor::g_state.dialog ) {
+        serial_monitor::g_state.dialog->loadDefaults();
+    }
+    if ( serial_monitor::g_state.sidebarWidget ) {
+        serial_monitor::g_state.sidebarWidget->loadDefaults();
     }
 }
 

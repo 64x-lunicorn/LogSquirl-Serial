@@ -42,16 +42,49 @@
  */
 
 #include "portwidget.h"
+#include "baudrate.h"
 #include "plugin.h"
 
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QVBoxLayout>
 
+#include <utility>
+
 namespace serial_monitor {
+
+namespace {
+
+/**
+ * Whether @p a and @p b name the same file.  Existing files are compared
+ * by their canonical path (resolving symlinks); otherwise the cleaned
+ * absolute paths are compared.  QFileInfo's own operator== cannot be
+ * used: two files that do not exist both have an empty canonical path,
+ * and compare equal.
+ */
+bool isSameFile( const QString& a, const QString& b )
+{
+    const QFileInfo fileA( a );
+    const QFileInfo fileB( b );
+    if ( fileA.exists() && fileB.exists() ) {
+        return fileA.canonicalFilePath() == fileB.canonicalFilePath();
+    }
+#if defined( Q_OS_WIN ) || defined( Q_OS_MACOS )
+    constexpr auto sensitivity = Qt::CaseInsensitive;
+#else
+    constexpr auto sensitivity = Qt::CaseSensitive;
+#endif
+    return QDir::cleanPath( fileA.absoluteFilePath() )
+               .compare( QDir::cleanPath( fileB.absoluteFilePath() ), sensitivity )
+           == 0;
+}
+
+} // namespace
 
 // ── Construction ────────────────────────────────────────────────────────
 
@@ -60,6 +93,10 @@ PortWidget::PortWidget( QWidget* parent )
 {
     setWindowTitle( "Serial Monitor" );
     setMinimumWidth( 480 );
+
+    // A top-level window of the plugin's own: when it is open while the
+    // user closes LogSquirl's main window, LogSquirl must still quit.
+    setAttribute( Qt::WA_QuitOnClose, false );
 
     auto* mainLayout = new QVBoxLayout( this );
 
@@ -74,6 +111,7 @@ PortWidget::PortWidget( QWidget* parent )
     portRow->addWidget( portCombo_ );
 
     refreshButton_ = new QPushButton( "\u27F3 Refresh", this );
+    refreshButton_->setObjectName( "refresh" );
     refreshButton_->setToolTip( "Refresh port list" );
     portRow->addWidget( refreshButton_ );
     portLayout->addLayout( portRow );
@@ -85,12 +123,7 @@ PortWidget::PortWidget( QWidget* parent )
     auto* settingsLayout = new QFormLayout( settingsGroup );
 
     baudCombo_ = new QComboBox( this );
-    const QList<int> baudRates
-        = { 300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 };
-    for ( const auto rate : baudRates ) {
-        baudCombo_->addItem( QString::number( rate ), rate );
-    }
-    baudCombo_->setCurrentIndex( baudCombo_->findData( 115200 ) );
+    initBaudRateCombo( baudCombo_ );
     settingsLayout->addRow( "Baud rate:", baudCombo_ );
 
     dataBitsCombo_ = new QComboBox( this );
@@ -125,6 +158,7 @@ PortWidget::PortWidget( QWidget* parent )
     settingsLayout->addRow( "Flow control:", flowControlCombo_ );
 
     timestampCheckBox_ = new QCheckBox( "Prepend timestamp to each line", this );
+    timestampCheckBox_->setObjectName( "timestamps" );
     timestampCheckBox_->setChecked( true );
     timestampCheckBox_->setToolTip( "Add [YYYY-MM-DD HH:mm:ss.zzz] prefix to each received line" );
     settingsLayout->addRow( timestampCheckBox_ );
@@ -217,35 +251,41 @@ PortWidget::PortWidget( QWidget* parent )
     connect( sendEdit_, &QLineEdit::returnPressed, this, &PortWidget::sendCapture );
     connect( portCombo_, &QComboBox::currentIndexChanged, this, [ this ]() { updateUiState(); } );
 
-    // Load default baud rate from config
-    const auto defaults = SerialProcess::defaultConfig();
-    const auto baudIdx = baudCombo_->findData( defaults.baudRate );
-    if ( baudIdx >= 0 ) {
-        baudCombo_->setCurrentIndex( baudIdx );
-    }
-    timestampCheckBox_->setChecked( defaults.timestamps );
+    // Load defaults from config
+    loadDefaults();
 
     // Initial port scan
     refreshPorts();
-    updateUiState();
 }
 
 // ── Public methods ──────────────────────────────────────────────────────
 
-void PortWidget::stopAll( bool cleanupTempFiles )
+void PortWidget::stopAll( TempFiles tempFiles )
 {
     const auto portNames = sessions_.keys();
     for ( const auto& name : portNames ) {
-        if ( auto* proc = sessions_.value( name ) ) {
-            proc->stop();
-            if ( !cleanupTempFiles ) {
-                proc->preserveTempFile();
-            }
-            proc->deleteLater();
+        auto* proc = takeSession( name );
+        proc->stop();
+        if ( tempFiles == TempFiles::Remove ) {
+            // Also the files of earlier rotations, which rotateSession()
+            // preserved for their tabs: at shutdown the tabs go too.
+            proc->removeTempFiles();
         }
+        else {
+            keepTempFiles( proc );
+        }
+        proc->deleteLater();
     }
-    sessions_.clear();
-    updateUiState();
+    if ( tempFiles == TempFiles::Remove ) {
+        // The tabs of sessions that ended before close with the host too.
+        // These are the sessions' own temporary directories, never a save
+        // path or the log directory.
+        for ( const auto& dir : std::as_const( endedTempDirs_ ) ) {
+            QDir( dir ).removeRecursively();
+        }
+        endedTempDirs_.clear();
+    }
+    updatePortCombo();
 }
 
 int PortWidget::activeSessionCount() const
@@ -265,23 +305,20 @@ void PortWidget::rotateSession( const QString& portName )
         return;
     }
 
-    // Prevent old temp dir from being auto-removed so the old tab keeps its data
-    proc->preserveTempFile();
-
     const auto newPath = proc->rotateLog();
     if ( newPath.isEmpty() ) {
-        if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification( g_state.handle,
-                                            qPrintable( "Failed to rotate log for " + portName ) );
-        }
+        // rotateLog() has reported why through errorOccurred()
         return;
     }
+
+    // The old tab keeps showing the old file, so the temporary directory
+    // must outlive this session (stopAll( TempFiles::Remove ) still removes it).
+    proc->preserveTempFile();
 
     // Open the new temp file in a follow-mode tab
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, newPath.toUtf8().constData(), 1 );
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( QString( "New session started for %1" ).arg( portName ) ) );
+        hostNotify( QString( "New session started for %1" ).arg( portName ) );
     }
 }
 
@@ -292,11 +329,26 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
         return false;
     }
 
-    auto* proc = new SerialProcess( config, savePath, this );
+    // The baud rate combo is editable, so its text may not be a rate.
+    if ( config.baudRate <= 0 ) {
+        const auto message
+            = QString( "Serial capture not started for %1: invalid baud rate." ).arg( name );
+        hostLog( LOGSQUIRL_LOG_WARNING, message );
+        hostNotify( message );
+        return false;
+    }
 
-    connect( proc, &SerialProcess::started, this, [ this, name ]() {
-        hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Serial session started for " + name ) );
-    } );
+    // Two sessions appending to one file would interleave their lines.
+    if ( !savePath.isEmpty() && isFileInUse( savePath ) ) {
+        const auto message = QString( "Serial capture not started for %1: another session is "
+                                      "already writing to %2." )
+                                 .arg( name, savePath );
+        hostLog( LOGSQUIRL_LOG_WARNING, message );
+        hostNotify( message );
+        return false;
+    }
+
+    auto* proc = new SerialProcess( config, savePath, this );
 
     connect( proc, &SerialProcess::finished, this,
              [ this, name ]() { onSessionFinished( name ); } );
@@ -304,47 +356,42 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
     connect( proc, &SerialProcess::errorOccurred, this,
              [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
 
-    proc->start();
-
-    if ( proc->isRunning() || !proc->tempFilePath().isEmpty() ) {
-        sessions_.insert( name, proc );
-
-        if ( g_state.api && g_state.handle ) {
-            const auto path = proc->tempFilePath().toUtf8();
-            g_state.api->open_file( g_state.handle, path.constData(), 1 );
-            g_state.api->show_notification(
-                g_state.handle, qPrintable( QString( "Serial capture started for %1 at %2 baud" )
-                                                .arg( name )
-                                                .arg( config.baudRate ) ) );
-        }
-
-        refreshPorts();
-        return true;
+    if ( !proc->start() ) {
+        // start() has reported why through errorOccurred()
+        delete proc;
+        return false;
     }
 
-    delete proc;
-    return false;
+    sessions_.insert( name, proc );
+
+    // Ask the host to open the log file in a follow-mode tab
+    if ( g_state.api && g_state.handle ) {
+        const auto path = proc->tempFilePath().toUtf8();
+        g_state.api->open_file( g_state.handle, path.constData(), 1 );
+    }
+    hostNotify(
+        QString( "Serial capture started for %1 at %2 baud" ).arg( name ).arg( config.baudRate ) );
+
+    updatePortCombo(); // Update combo box markers
+    return true;
 }
 
 void PortWidget::stopSession( const QString& portName )
 {
-    if ( !sessions_.contains( portName ) ) {
+    auto* proc = takeSession( portName );
+    if ( !proc ) {
         return;
     }
 
-    auto* proc = sessions_.take( portName );
     proc->stop();
-    proc->preserveTempFile();
+    keepTempFiles( proc );
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
-                                            .arg( portName )
-                                            .arg( proc->lineCount() ) ) );
-    }
+    hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
+                    .arg( portName )
+                    .arg( proc->lineCount() ) );
 
     proc->deleteLater();
-    refreshPorts();
+    updatePortCombo();
 }
 
 qint64 PortWidget::sessionLineCount( const QString& portName ) const
@@ -375,17 +422,28 @@ bool PortWidget::sendToSession( const QString& portName, const QByteArray& data,
 
 void PortWidget::refreshPorts()
 {
+    setPorts( SerialProcess::discoverPorts() );
+}
+
+void PortWidget::setPorts( const QStringList& ports )
+{
+    ports_ = ports;
+    updatePortCombo();
+    Q_EMIT portsChanged();
+}
+
+void PortWidget::updatePortCombo()
+{
     const auto currentSelection = currentPortName();
     portCombo_->clear();
 
-    const auto ports = SerialProcess::discoverPorts();
-    if ( ports.isEmpty() ) {
+    if ( ports_.isEmpty() ) {
         portCombo_->addItem( "(no ports)" );
         portCombo_->setEnabled( false );
     }
     else {
         portCombo_->setEnabled( true );
-        for ( const auto& name : ports ) {
+        for ( const auto& name : ports_ ) {
             // Mark ports that already have an active session
             if ( sessions_.contains( name ) ) {
                 portCombo_->addItem( name + " \u25CF", name );
@@ -414,8 +472,7 @@ void PortWidget::startCapture()
 
     // Don't start twice for the same port
     if ( sessions_.contains( name ) ) {
-        hostLog( LOGSQUIRL_LOG_WARNING,
-                 qPrintable( "Serial capture already running for " + name ) );
+        hostLog( LOGSQUIRL_LOG_WARNING, "Serial capture already running for " + name );
         return;
     }
 
@@ -424,83 +481,27 @@ void PortWidget::startCapture()
                               ? savePathEdit_->text()
                               : QString();
 
-    auto config = buildConfig();
-    auto* proc = new SerialProcess( config, savePath, this );
-
-    connect( proc, &SerialProcess::started, this, [ this, name ]() {
-        hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Serial session started for " + name ) );
-    } );
-
-    connect( proc, &SerialProcess::finished, this,
-             [ this, name ]() { onSessionFinished( name ); } );
-
-    connect( proc, &SerialProcess::errorOccurred, this,
-             [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
-
-    proc->start();
-
-    if ( proc->isRunning() || !proc->tempFilePath().isEmpty() ) {
-        sessions_.insert( name, proc );
-
-        // Ask the host to open the temp file in a follow-mode tab
-        if ( g_state.api && g_state.handle ) {
-            const auto path = proc->tempFilePath().toUtf8();
-            g_state.api->open_file( g_state.handle, path.constData(), 1 );
-        }
-
-        // Notify via host notification
-        if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification(
-                g_state.handle, qPrintable( QString( "Serial capture started for %1 at %2 baud" )
-                                                .arg( name )
-                                                .arg( config.baudRate ) ) );
-        }
-    }
-    else {
-        delete proc;
-    }
-
-    refreshPorts();
+    startSession( buildConfig(), savePath );
 }
 
 void PortWidget::stopCapture()
 {
-    const auto name = currentPortName();
-    if ( name.isEmpty() || !sessions_.contains( name ) ) {
-        return;
-    }
-
-    auto* proc = sessions_.take( name );
-    proc->stop();
-    proc->preserveTempFile();
-    proc->deleteLater();
-
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( QString( "Serial capture stopped for %1 (%2 lines)" )
-                                            .arg( name )
-                                            .arg( proc->lineCount() ) ) );
-    }
-
-    refreshPorts();
+    stopSession( currentPortName() );
 }
 
 void PortWidget::stopAllCaptures()
 {
     stopAll();
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification( g_state.handle, "All serial sessions stopped." );
-    }
-
-    refreshPorts();
+    hostNotify( "All serial sessions stopped." );
 }
 
 void PortWidget::browseSavePath()
 {
-    const auto path
-        = QFileDialog::getSaveFileName( this, "Save serial output", savePathEdit_->text(),
-                                        "Log files (*.log *.txt);;All files (*)" );
+    // An existing file is appended to, not replaced, so don't ask to replace it.
+    const auto path = QFileDialog::getSaveFileName(
+        this, "Save serial output", savePathEdit_->text(), "Log files (*.log *.txt);;All files (*)",
+        nullptr, QFileDialog::DontConfirmOverwrite );
 
     if ( !path.isEmpty() ) {
         savePathEdit_->setText( path );
@@ -526,29 +527,28 @@ void PortWidget::sendCapture()
 
 void PortWidget::onSessionFinished( const QString& portName )
 {
-    if ( sessions_.contains( portName ) ) {
-        auto* proc = sessions_.take( portName );
-
-        // Preserve the temp file so the LogSquirl tab keeps its content.
-        // When using a save path the file is already persistent.
-        proc->preserveTempFile();
-        proc->deleteLater();
-
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 qPrintable( QString( "Serial session for %1 ended." ).arg( portName ) ) );
+    auto* proc = takeSession( portName );
+    if ( !proc ) {
+        return;
     }
 
+    // Preserve the temp file so the LogSquirl tab keeps its content.
+    // When using a save path the file is already persistent.
+    keepTempFiles( proc );
+    proc->deleteLater();
+
+    hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
+
+    // A session ends by itself when its device is unplugged; find out
+    // whether the port is gone
     refreshPorts();
 }
 
 void PortWidget::onSessionError( const QString& portName, const QString& message )
 {
-    hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( portName + ": " + message ) );
+    hostLog( LOGSQUIRL_LOG_ERROR, portName + ": " + message );
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification(
-            g_state.handle, qPrintable( "Serial error (" + portName + "): " + message ) );
-    }
+    hostNotify( "Serial error (" + portName + "): " + message );
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────
@@ -577,17 +577,57 @@ void PortWidget::updateUiState()
     }
 }
 
+SerialProcess* PortWidget::takeSession( const QString& portName )
+{
+    auto* proc = sessions_.take( portName );
+    if ( proc ) {
+        // The session is over as far as this widget is concerned.  Stopping
+        // it emits finished(), and onSessionFinished() must not act on that:
+        // it would preserve a temp file that stopAll() is about to remove,
+        // and rescan the ports once per session.
+        proc->disconnect( this );
+    }
+    return proc;
+}
+
+void PortWidget::keepTempFiles( SerialProcess* proc )
+{
+    const auto dir = proc->preserveTempFile();
+    if ( !dir.isEmpty() && !endedTempDirs_.contains( dir ) ) {
+        endedTempDirs_.append( dir );
+    }
+}
+
+bool PortWidget::isFileInUse( const QString& path ) const
+{
+    for ( const auto* proc : sessions_ ) {
+        if ( isSameFile( proc->tempFilePath(), path ) ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString PortWidget::currentPortName() const
 {
     const auto data = portCombo_->currentData();
     return data.isValid() ? data.toString() : QString();
 }
 
+void PortWidget::loadDefaults()
+{
+    const auto defaults = SerialProcess::defaultConfig();
+    if ( defaults.baudRate > 0 ) {
+        selectBaudRate( baudCombo_, defaults.baudRate );
+    }
+    timestampCheckBox_->setChecked( defaults.timestamps );
+}
+
 SerialConfig PortWidget::buildConfig() const
 {
     SerialConfig cfg;
     cfg.portName = currentPortName();
-    cfg.baudRate = baudCombo_->currentData().toInt();
+    cfg.baudRate = baudRateFrom( baudCombo_ );
     cfg.dataBits = static_cast<QSerialPort::DataBits>( dataBitsCombo_->currentData().toInt() );
     cfg.stopBits = static_cast<QSerialPort::StopBits>( stopBitsCombo_->currentData().toInt() );
     cfg.parity = static_cast<QSerialPort::Parity>( parityCombo_->currentData().toInt() );

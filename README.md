@@ -90,7 +90,8 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    - **Port dropdown** — Select a connected serial port.
    - **Refresh** — Re-scan for serial ports.
    - **Serial settings** — Configure baud rate, data bits, stop bits, parity,
-     flow control, and timestamps per session.
+     flow control, and timestamps per session.  Pick a common baud rate or
+     type any other rate the device needs (e.g. 74880 or 250000).
    - **Start** — Begin capturing serial data for the selected port.
      A new tab opens in LogSquirl with live output in follow mode.
    - **Stop** — Stop the capture for the selected port.
@@ -109,7 +110,8 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    Each port gets its own tab and session entry.
 
 6. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
-   Configure.  Set the default baud rate for new sessions.
+   Configure.  Set the default baud rate for new sessions (any rate from
+   300 to 4000000; one missing from the list is added to it).
 
 ## Prerequisites
 
@@ -242,12 +244,15 @@ logsquirl-serial/
 │   ├── portwidget.h            # Session management (start/stop/rotate)
 │   ├── portwidget.cpp
 │   ├── sidebarwidget.h         # LogSquirl sidebar tab (port list + controls)
-│   └── sidebarwidget.cpp
+│   ├── sidebarwidget.cpp
+│   ├── baudrate.h              # Editable baud rate combo shared by dialog and sidebar
+│   └── baudrate.cpp
 ├── tests/
 │   ├── CMakeLists.txt          # Catch2 test setup
 │   ├── tests_main.cpp          # QApplication + Catch2 runner
 │   ├── plugininfo_test.cpp
 │   ├── parseportlist_test.cpp
+│   ├── baudrate_test.cpp
 │   └── serialprocess_test.cpp
 └── docs/
     └── DEVELOPER_GUIDE.md      # How to use this as a plugin template

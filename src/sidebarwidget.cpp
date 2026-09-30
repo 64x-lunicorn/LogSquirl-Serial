@@ -35,16 +35,15 @@
  */
 
 #include "sidebarwidget.h"
+#include "baudrate.h"
 #include "plugin.h"
 #include "portwidget.h"
 
-#include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QRegularExpression>
 #include <QSettings>
 #include <QVBoxLayout>
 
@@ -72,6 +71,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     portRow->addWidget( portCombo_ );
 
     refreshButton_ = new QPushButton( "\u27F3", this );
+    refreshButton_->setObjectName( "refresh" );
     refreshButton_->setFixedWidth( 30 );
     refreshButton_->setToolTip( "Refresh port list" );
     portRow->addWidget( refreshButton_ );
@@ -85,12 +85,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     settingsLayout->setContentsMargins( 6, 6, 6, 6 );
 
     baudCombo_ = new QComboBox( this );
-    const QList<int> baudRates
-        = { 300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600 };
-    for ( const auto rate : baudRates ) {
-        baudCombo_->addItem( QString::number( rate ), rate );
-    }
-    baudCombo_->setCurrentIndex( baudCombo_->findData( 115200 ) );
+    initBaudRateCombo( baudCombo_ );
     settingsLayout->addRow( "Baud:", baudCombo_ );
 
     dataBitsCombo_ = new QComboBox( this );
@@ -125,6 +120,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     settingsLayout->addRow( "Flow:", flowControlCombo_ );
 
     timestampCheckBox_ = new QCheckBox( "Timestamps", this );
+    timestampCheckBox_->setObjectName( "timestamps" );
     timestampCheckBox_->setChecked( true );
     timestampCheckBox_->setToolTip( "Add [YYYY-MM-DD HH:mm:ss.zzz] prefix to each line" );
     settingsLayout->addRow( timestampCheckBox_ );
@@ -233,12 +229,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     connect( portCombo_, &QComboBox::currentIndexChanged, this, [ this ]() { updateUiState(); } );
 
     // Load defaults from config
-    const auto defaults = SerialProcess::defaultConfig();
-    const auto baudIdx = baudCombo_->findData( defaults.baudRate );
-    if ( baudIdx >= 0 ) {
-        baudCombo_->setCurrentIndex( baudIdx );
-    }
-    timestampCheckBox_->setChecked( defaults.timestamps );
+    loadDefaults();
 
     // Periodic refresh of line counts (every 1 second)
     refreshTimer_ = new QTimer( this );
@@ -246,20 +237,26 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     connect( refreshTimer_, &QTimer::timeout, this, &SidebarWidget::refreshSessionList );
     refreshTimer_->start();
 
-    // Initial populate
+    connect( portWidget_, &PortWidget::portsChanged, this, &SidebarWidget::updatePortList );
+
+    // Initial populate.  PortWidget has scanned the ports already.
     loadLogDir();
-    refreshPorts();
-    updateUiState();
+    updatePortList();
 }
 
 // ── Private slots ───────────────────────────────────────────────────────
 
 void SidebarWidget::refreshPorts()
 {
+    portWidget_->refreshPorts();
+}
+
+void SidebarWidget::updatePortList()
+{
     const auto currentSelection = currentPortName();
     portCombo_->clear();
 
-    const auto ports = SerialProcess::discoverPorts();
+    const auto& ports = portWidget_->ports();
     if ( ports.isEmpty() ) {
         portCombo_->addItem( "(no ports)" );
         portCombo_->setEnabled( false );
@@ -295,7 +292,7 @@ void SidebarWidget::startCapture()
     const auto config = buildConfig();
     const auto savePath = generateSavePath( name );
     portWidget_->startSession( config, savePath );
-    refreshPorts();
+    updatePortList();
 }
 
 void SidebarWidget::stopSelectedCapture()
@@ -306,18 +303,16 @@ void SidebarWidget::stopSelectedCapture()
     }
 
     portWidget_->stopSession( name );
-    refreshPorts();
+    updatePortList();
 }
 
 void SidebarWidget::stopAllCaptures()
 {
     portWidget_->stopAll();
 
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification( g_state.handle, "All serial sessions stopped." );
-    }
+    hostNotify( "All serial sessions stopped." );
 
-    refreshPorts();
+    updatePortList();
 }
 
 void SidebarWidget::sendCommand()
@@ -327,24 +322,19 @@ void SidebarWidget::sendCommand()
         return;
     }
 
+    // Only ever send to the selected port.  Another device may react to
+    // the command in ways nobody intended.
     const auto name = currentPortName();
-    if ( name.isEmpty() || !portWidget_->isSessionActive( name ) ) {
-        // Fall back to first active session if current port has none
-        const auto active = portWidget_->activePorts();
-        if ( active.isEmpty() ) {
-            return;
-        }
-        const auto target = active.first();
-        const auto lineEnding
-            = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
-        portWidget_->sendToSession( target, text.toUtf8(), lineEnding );
-    }
-    else {
-        const auto lineEnding
-            = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
-        portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
+    if ( !portWidget_->isSessionActive( name ) ) {
+        hostNotify(
+            name.isEmpty()
+                ? QString( "Select a port with a running capture to send a command." )
+                : QString( "No capture is running on %1; the command was not sent." ).arg( name ) );
+        return;
     }
 
+    const auto lineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
+    portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
     sendEdit_->clear();
 }
 
@@ -393,12 +383,12 @@ void SidebarWidget::rebuildSessionList()
 
         connect( rotateBtn, &QPushButton::clicked, this, [ this, portName ]() {
             portWidget_->rotateSession( portName );
-            refreshPorts();
+            updatePortList();
         } );
 
         connect( stopBtn, &QPushButton::clicked, this, [ this, portName ]() {
             portWidget_->stopSession( portName );
-            refreshPorts();
+            updatePortList();
         } );
 
         item->setSizeHint( row->sizeHint() );
@@ -412,11 +402,20 @@ QString SidebarWidget::currentPortName() const
     return data.isValid() ? data.toString() : QString();
 }
 
+void SidebarWidget::loadDefaults()
+{
+    const auto defaults = SerialProcess::defaultConfig();
+    if ( defaults.baudRate > 0 ) {
+        selectBaudRate( baudCombo_, defaults.baudRate );
+    }
+    timestampCheckBox_->setChecked( defaults.timestamps );
+}
+
 SerialConfig SidebarWidget::buildConfig() const
 {
     SerialConfig config;
     config.portName = currentPortName();
-    config.baudRate = baudCombo_->currentData().toInt();
+    config.baudRate = baudRateFrom( baudCombo_ );
     config.dataBits = static_cast<QSerialPort::DataBits>( dataBitsCombo_->currentData().toInt() );
     config.stopBits = static_cast<QSerialPort::StopBits>( stopBitsCombo_->currentData().toInt() );
     config.parity = static_cast<QSerialPort::Parity>( parityCombo_->currentData().toInt() );
@@ -439,11 +438,10 @@ void SidebarWidget::updateUiState()
     stopAllButton_->setEnabled( activeCount > 0 );
     stopAllButton_->setVisible( activeCount > 1 );
 
-    // Send controls are enabled when any session is active
-    const bool canSend = activeCount > 0;
-    sendEdit_->setEnabled( canSend );
-    sendButton_->setEnabled( canSend );
-    lineEndingCombo_->setEnabled( canSend );
+    // Send controls enabled when the currently selected port has an active session
+    sendEdit_->setEnabled( isActive );
+    sendButton_->setEnabled( isActive );
+    lineEndingCombo_->setEnabled( isActive );
 
     if ( activeCount == 0 ) {
         statusLabel_->setText( {} );
@@ -469,11 +467,7 @@ QString SidebarWidget::generateSavePath( const QString& portName ) const
     QDir().mkpath( dir );
 
     // Format: YYYY-MM-dd_HHmmss_<port>.log
-    const auto timestamp = QDateTime::currentDateTime().toString( "yyyy-MM-dd_HHmmss" );
-    // Sanitise the port name for use as a filename component
-    auto safeName = portName;
-    safeName.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
-    return QDir( dir ).filePath( QString( "%1_%2.log" ).arg( timestamp, safeName ) );
+    return SerialProcess::generateLogPath( dir, portName );
 }
 
 void SidebarWidget::loadLogDir()
