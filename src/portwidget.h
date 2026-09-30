@@ -137,10 +137,26 @@ public:
     /** Set the serial settings to the saved defaults (baud rate, timestamps). */
     void loadDefaults();
 
-private Q_SLOTS:
-    /** Re-scan for serial ports and update the combo box. */
+    /** Names of the ports found by the most recent scan. */
+    const QStringList& ports() const
+    {
+        return ports_;
+    }
+
+public Q_SLOTS:
+    /**
+     * Re-scan for serial ports.  The enumeration blocks, so it only runs
+     * when asked for (Refresh, a session ending) and at construction, not
+     * on every start and stop; portsChanged() is emitted when ports() is
+     * updated.
+     */
     void refreshPorts();
 
+Q_SIGNALS:
+    /** Emitted when a port scan has finished and ports() is updated. */
+    void portsChanged();
+
+private Q_SLOTS:
     /** Start capture for the currently selected port. */
     void startCapture();
 
@@ -165,6 +181,12 @@ private Q_SLOTS:
 private:
     /** Update UI state (button enable/disable, status label). */
     void updateUiState();
+
+    /** Refill the port combo box from ports(), marking active sessions. */
+    void updatePortCombo();
+
+    /** Store the result of a scan and announce it. */
+    void setPorts( const QStringList& ports );
 
     /** Return the port name of the currently selected entry, or empty. */
     QString currentPortName() const;
@@ -214,6 +236,8 @@ private:
     QLabel* statusLabel_ = nullptr;
 
     // ── Active sessions (portName → SerialProcess*) ─────────────────
+    QStringList ports_; ///< Result of the last port scan.
+
     QMap<QString, SerialProcess*> sessions_;
 };
 

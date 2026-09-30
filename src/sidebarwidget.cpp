@@ -71,6 +71,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     portRow->addWidget( portCombo_ );
 
     refreshButton_ = new QPushButton( "\u27F3", this );
+    refreshButton_->setObjectName( "refresh" );
     refreshButton_->setFixedWidth( 30 );
     refreshButton_->setToolTip( "Refresh port list" );
     portRow->addWidget( refreshButton_ );
@@ -236,20 +237,26 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     connect( refreshTimer_, &QTimer::timeout, this, &SidebarWidget::refreshSessionList );
     refreshTimer_->start();
 
-    // Initial populate
+    connect( portWidget_, &PortWidget::portsChanged, this, &SidebarWidget::updatePortList );
+
+    // Initial populate.  PortWidget has scanned the ports already.
     loadLogDir();
-    refreshPorts();
-    updateUiState();
+    updatePortList();
 }
 
 // ── Private slots ───────────────────────────────────────────────────────
 
 void SidebarWidget::refreshPorts()
 {
+    portWidget_->refreshPorts();
+}
+
+void SidebarWidget::updatePortList()
+{
     const auto currentSelection = currentPortName();
     portCombo_->clear();
 
-    const auto ports = SerialProcess::discoverPorts();
+    const auto& ports = portWidget_->ports();
     if ( ports.isEmpty() ) {
         portCombo_->addItem( "(no ports)" );
         portCombo_->setEnabled( false );
@@ -285,7 +292,7 @@ void SidebarWidget::startCapture()
     const auto config = buildConfig();
     const auto savePath = generateSavePath( name );
     portWidget_->startSession( config, savePath );
-    refreshPorts();
+    updatePortList();
 }
 
 void SidebarWidget::stopSelectedCapture()
@@ -296,7 +303,7 @@ void SidebarWidget::stopSelectedCapture()
     }
 
     portWidget_->stopSession( name );
-    refreshPorts();
+    updatePortList();
 }
 
 void SidebarWidget::stopAllCaptures()
@@ -305,7 +312,7 @@ void SidebarWidget::stopAllCaptures()
 
     hostNotify( "All serial sessions stopped." );
 
-    refreshPorts();
+    updatePortList();
 }
 
 void SidebarWidget::sendCommand()
@@ -376,12 +383,12 @@ void SidebarWidget::rebuildSessionList()
 
         connect( rotateBtn, &QPushButton::clicked, this, [ this, portName ]() {
             portWidget_->rotateSession( portName );
-            refreshPorts();
+            updatePortList();
         } );
 
         connect( stopBtn, &QPushButton::clicked, this, [ this, portName ]() {
             portWidget_->stopSession( portName );
-            refreshPorts();
+            updatePortList();
         } );
 
         item->setSizeHint( row->sizeHint() );

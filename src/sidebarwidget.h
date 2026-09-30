@@ -75,8 +75,11 @@ public:
     void loadDefaults();
 
 private Q_SLOTS:
-    /** Re-scan for serial ports and update the combo box. */
+    /** Ask the PortWidget to re-scan for serial ports. */
     void refreshPorts();
+
+    /** Refill the port combo box from the PortWidget's port list. */
+    void updatePortList();
 
     /** Start capture for the currently selected port. */
     void startCapture();

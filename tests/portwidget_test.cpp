@@ -348,3 +348,53 @@ SCENARIO( "an unplugged device ends its session", "[portwidget]" )
     }
 }
 #endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "starting and stopping a session does not rescan the ports", "[portwidget]" )
+{
+    GIVEN( "a port widget that has scanned the ports once" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        const auto scansBefore = host.logs.filter( "Discovered" ).size();
+        REQUIRE( scansBefore == 1 );
+
+        WHEN( "a session is started and stopped" )
+        {
+            REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
+            widget.stopSession( device.devicePath() );
+
+            THEN( "the ports are not enumerated again" )
+            {
+                REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore );
+            }
+
+            QDir( QFileInfo( host.openedFiles.first() ).absolutePath() ).removeRecursively();
+        }
+    }
+}
+#endif
+
+SCENARIO( "the port list is rescanned on request", "[portwidget]" )
+{
+    GIVEN( "a port widget" )
+    {
+        FakeHost host;
+        PortWidget widget;
+        int changes = 0;
+        QObject::connect( &widget, &PortWidget::portsChanged, [ &changes ]() { ++changes; } );
+        const auto scansBefore = host.logs.filter( "Discovered" ).size();
+
+        WHEN( "refreshing the ports" )
+        {
+            widget.refreshPorts();
+
+            THEN( "they are enumerated once and the change announced" )
+            {
+                REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore + 1 );
+                REQUIRE( changes == 1 );
+            }
+        }
+    }
+}

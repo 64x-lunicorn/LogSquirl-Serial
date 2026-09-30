@@ -33,6 +33,7 @@
 #include "sidebarwidget.h"
 
 #include <QLineEdit>
+#include <QPushButton>
 
 using serial_monitor::PortWidget;
 using serial_monitor::SerialConfig;
@@ -84,3 +85,35 @@ SCENARIO( "a command is only sent to the selected port", "[sidebarwidget]" )
     }
 }
 #endif
+
+SCENARIO( "the sidebar shares the dialog's port list", "[sidebarwidget]" )
+{
+    GIVEN( "a port widget that has scanned the ports" )
+    {
+        FakeHost host;
+        PortWidget portWidget;
+        const auto scansBefore = host.logs.filter( "Discovered" ).size();
+
+        WHEN( "the sidebar is created" )
+        {
+            SidebarWidget sidebar( &portWidget );
+
+            THEN( "it does not enumerate the ports again" )
+            {
+                REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore );
+            }
+
+            AND_WHEN( "the user clicks the sidebar's Refresh button" )
+            {
+                auto* refresh = sidebar.findChild<QPushButton*>( "refresh" );
+                REQUIRE( refresh );
+                refresh->click();
+
+                THEN( "the ports are enumerated once, for both" )
+                {
+                    REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore + 1 );
+                }
+            }
+        }
+    }
+}

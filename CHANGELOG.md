@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file cleanup never took effect): each stopped session reported back that
   it had ended, and handling that preserved its file; the files of a
   rotated session were never removed at all.
+- Starting or stopping a capture no longer enumerates the serial ports,
+  which blocks the UI, up to twice per click (once for the dialog, once
+  for the sidebar). The dialog and sidebar now share one port list, which
+  is rescanned at startup, on Refresh and when a session ends by itself.
 - Unplugging a device ends its session: it is removed from the list and
   the user is told the device was disconnected. Before, the session stayed
   listed as active, capturing nothing.

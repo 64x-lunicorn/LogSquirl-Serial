@@ -109,6 +109,7 @@ PortWidget::PortWidget( QWidget* parent )
     portRow->addWidget( portCombo_ );
 
     refreshButton_ = new QPushButton( "\u27F3 Refresh", this );
+    refreshButton_->setObjectName( "refresh" );
     refreshButton_->setToolTip( "Refresh port list" );
     portRow->addWidget( refreshButton_ );
     portLayout->addLayout( portRow );
@@ -253,7 +254,6 @@ PortWidget::PortWidget( QWidget* parent )
 
     // Initial port scan
     refreshPorts();
-    updateUiState();
 }
 
 // ── Public methods ──────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ void PortWidget::stopAll( bool cleanupTempFiles )
         }
         proc->deleteLater();
     }
-    updateUiState();
+    updatePortCombo();
 }
 
 int PortWidget::activeSessionCount() const
@@ -361,7 +361,7 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
     hostNotify(
         QString( "Serial capture started for %1 at %2 baud" ).arg( name ).arg( config.baudRate ) );
 
-    refreshPorts(); // Update combo box markers
+    updatePortCombo(); // Update combo box markers
     return true;
 }
 
@@ -380,7 +380,7 @@ void PortWidget::stopSession( const QString& portName )
                     .arg( proc->lineCount() ) );
 
     proc->deleteLater();
-    refreshPorts();
+    updatePortCombo();
 }
 
 qint64 PortWidget::sessionLineCount( const QString& portName ) const
@@ -411,17 +411,28 @@ bool PortWidget::sendToSession( const QString& portName, const QByteArray& data,
 
 void PortWidget::refreshPorts()
 {
+    setPorts( SerialProcess::discoverPorts() );
+}
+
+void PortWidget::setPorts( const QStringList& ports )
+{
+    ports_ = ports;
+    updatePortCombo();
+    Q_EMIT portsChanged();
+}
+
+void PortWidget::updatePortCombo()
+{
     const auto currentSelection = currentPortName();
     portCombo_->clear();
 
-    const auto ports = SerialProcess::discoverPorts();
-    if ( ports.isEmpty() ) {
+    if ( ports_.isEmpty() ) {
         portCombo_->addItem( "(no ports)" );
         portCombo_->setEnabled( false );
     }
     else {
         portCombo_->setEnabled( true );
-        for ( const auto& name : ports ) {
+        for ( const auto& name : ports_ ) {
             // Mark ports that already have an active session
             if ( sessions_.contains( name ) ) {
                 portCombo_->addItem( name + " \u25CF", name );
@@ -472,8 +483,6 @@ void PortWidget::stopAllCaptures()
     stopAll();
 
     hostNotify( "All serial sessions stopped." );
-
-    refreshPorts();
 }
 
 void PortWidget::browseSavePath()
@@ -519,6 +528,8 @@ void PortWidget::onSessionFinished( const QString& portName )
 
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
 
+    // A session ends by itself when its device is unplugged; find out
+    // whether the port is gone
     refreshPorts();
 }
 
