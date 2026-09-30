@@ -35,6 +35,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 using serial_monitor::PortWidget;
@@ -175,6 +176,52 @@ SCENARIO( "a failed rotation is reported once", "[portwidget]" )
         }
 
         widget.stopAll();
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" )
+{
+    GIVEN( "a session writing to a temporary file" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        auto* widget = new PortWidget;
+        REQUIRE( widget->startSession( configFor( device.devicePath() ) ) );
+        REQUIRE( host.openedFiles.size() == 1 );
+        const auto tempFile = host.openedFiles.first();
+        const auto scansBefore = host.logs.filter( "Discovered" ).size();
+
+        WHEN( "the plugin shuts down: stopAll( true ), then the widget is deleted" )
+        {
+            widget->stopAll( true );
+            const auto scansDuringStop = host.logs.filter( "Discovered" ).size() - scansBefore;
+            delete widget;
+
+            THEN( "the temporary file is removed" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( tempFile ) );
+            }
+
+            THEN( "the ports are not scanned again for the stopped session" )
+            {
+                REQUIRE( scansDuringStop == 0 );
+            }
+        }
+
+        WHEN( "the user stops all sessions: stopAll(), then the widget is deleted" )
+        {
+            widget->stopAll();
+            delete widget;
+
+            THEN( "the temporary file is kept for its tab" )
+            {
+                REQUIRE( QFileInfo::exists( tempFile ) );
+            }
+
+            QDir( QFileInfo( tempFile ).absolutePath() ).removeRecursively();
+        }
     }
 }
 #endif

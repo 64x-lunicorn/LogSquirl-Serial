@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A session whose port cannot be opened is no longer listed as active:
   the error is shown once, no tab is opened, and no empty log file is left
   behind.
+- Temporary log files are now actually removed on shutdown (0.4.0's temp
+  file cleanup never took effect): each stopped session reported back that
+  it had ended, and handling that preserved its file.
 - Starting, stopping and rotating never truncate an existing log file.
   A save path is appended to, so Stop and Start with the dialog's fixed
   save path keep the earlier capture; generated file names get a `_2`,

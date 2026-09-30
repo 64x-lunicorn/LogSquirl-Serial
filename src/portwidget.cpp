@@ -237,15 +237,13 @@ void PortWidget::stopAll( bool cleanupTempFiles )
 {
     const auto portNames = sessions_.keys();
     for ( const auto& name : portNames ) {
-        if ( auto* proc = sessions_.value( name ) ) {
-            proc->stop();
-            if ( !cleanupTempFiles ) {
-                proc->preserveTempFile();
-            }
-            proc->deleteLater();
+        auto* proc = takeSession( name );
+        proc->stop();
+        if ( !cleanupTempFiles ) {
+            proc->preserveTempFile();
         }
+        proc->deleteLater();
     }
-    sessions_.clear();
     updateUiState();
 }
 
@@ -329,11 +327,11 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
 
 void PortWidget::stopSession( const QString& portName )
 {
-    if ( !sessions_.contains( portName ) ) {
+    auto* proc = takeSession( portName );
+    if ( !proc ) {
         return;
     }
 
-    auto* proc = sessions_.take( portName );
     proc->stop();
     proc->preserveTempFile();
 
@@ -426,21 +424,7 @@ void PortWidget::startCapture()
 
 void PortWidget::stopCapture()
 {
-    const auto name = currentPortName();
-    if ( name.isEmpty() || !sessions_.contains( name ) ) {
-        return;
-    }
-
-    auto* proc = sessions_.take( name );
-    proc->stop();
-    proc->preserveTempFile();
-    proc->deleteLater();
-
-    hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
-                    .arg( name )
-                    .arg( proc->lineCount() ) );
-
-    refreshPorts();
+    stopSession( currentPortName() );
 }
 
 void PortWidget::stopAllCaptures()
@@ -483,16 +467,17 @@ void PortWidget::sendCapture()
 
 void PortWidget::onSessionFinished( const QString& portName )
 {
-    if ( sessions_.contains( portName ) ) {
-        auto* proc = sessions_.take( portName );
-
-        // Preserve the temp file so the LogSquirl tab keeps its content.
-        // When using a save path the file is already persistent.
-        proc->preserveTempFile();
-        proc->deleteLater();
-
-        hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
+    auto* proc = takeSession( portName );
+    if ( !proc ) {
+        return;
     }
+
+    // Preserve the temp file so the LogSquirl tab keeps its content.
+    // When using a save path the file is already persistent.
+    proc->preserveTempFile();
+    proc->deleteLater();
+
+    hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
 
     refreshPorts();
 }
@@ -528,6 +513,19 @@ void PortWidget::updateUiState()
     else {
         statusLabel_->setText( "No active sessions" );
     }
+}
+
+SerialProcess* PortWidget::takeSession( const QString& portName )
+{
+    auto* proc = sessions_.take( portName );
+    if ( proc ) {
+        // The session is over as far as this widget is concerned.  Stopping
+        // it emits finished(), and onSessionFinished() must not act on that:
+        // it would preserve a temp file that stopAll( true ) is cleaning up,
+        // and rescan the ports once per session.
+        proc->disconnect( this );
+    }
+    return proc;
 }
 
 bool PortWidget::isFileInUse( const QString& path ) const

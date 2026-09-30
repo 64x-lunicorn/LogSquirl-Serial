@@ -165,6 +165,14 @@ private:
     /** Return the port name of the currently selected entry, or empty. */
     QString currentPortName() const;
 
+    /**
+     * Remove the session for @p portName from the active sessions and cut
+     * its signals to this widget.  The caller stops and deletes it.
+     *
+     * @return The session, or nullptr if there is none for @p portName.
+     */
+    SerialProcess* takeSession( const QString& portName );
+
     /** Whether an active session writes to the file at @p path. */
     bool isFileInUse( const QString& path ) const;
 
