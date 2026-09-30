@@ -221,6 +221,7 @@ bool SerialProcess::start()
 
     lineCount_ = 0;
     readBuffer_.clear();
+    deviceLost_ = false;
 
     // Configure the serial port
     port_.setPortName( config_.portName );
@@ -428,7 +429,18 @@ void SerialProcess::onPortError( QSerialPort::SerialPortError error )
 {
     // NoError is emitted on successful operations — ignore it.  While the
     // port is not open, the error comes from open(), and start() reports it.
-    if ( error == QSerialPort::NoError || !port_.isOpen() ) {
+    if ( error == QSerialPort::NoError || !port_.isOpen() || deviceLost_ ) {
+        return;
+    }
+
+    if ( error == QSerialPort::ResourceError ) {
+        // The device is gone (unplugged, powered off).  The port stays open
+        // but will never deliver data again, so end the session - from the
+        // event loop, not from within QSerialPort's own error handling.
+        deviceLost_ = true;
+        Q_EMIT errorOccurred(
+            QString( "%1 was disconnected; capture stopped." ).arg( config_.portName ) );
+        QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
         return;
     }
 

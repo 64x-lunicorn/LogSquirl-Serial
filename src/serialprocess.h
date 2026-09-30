@@ -296,7 +296,10 @@ private Q_SLOTS:
     /** Handle new data available on the serial port. */
     void onReadyRead();
 
-    /** Handle serial port errors. */
+    /**
+     * Handle serial port errors.  A ResourceError (device unplugged)
+     * stops the session.
+     */
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
@@ -320,6 +323,7 @@ private:
     int rotationCount_ = 0;       ///< Incremented on each rotateLog() call.
     bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
     bool createdLogFile_ = false; ///< True when start() created the log file.
+    bool deviceLost_ = false;     ///< True once the port reported the device gone.
 };
 
 } // namespace serial_monitor

@@ -225,3 +225,46 @@ SCENARIO( "stopAll decides whether temporary log files survive", "[portwidget]" 
     }
 }
 #endif
+
+#ifdef Q_OS_UNIX
+// A pseudo-terminal cannot be unplugged: QSerialPort does not notice when
+// its other side closes.  A real USB adapter that is pulled makes the port
+// report QSerialPort::ResourceError, so the test delivers that error to
+// the session's handler directly.
+SCENARIO( "an unplugged device ends its session", "[portwidget]" )
+{
+    GIVEN( "a running session" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
+        auto* session = widget.findChild<serial_monitor::SerialProcess*>();
+        REQUIRE( session );
+        host.notifications.clear();
+
+        WHEN( "the port reports that the device is gone, twice" )
+        {
+            for ( int i = 0; i < 2; ++i ) {
+                QMetaObject::invokeMethod(
+                    session, "onPortError",
+                    Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+            }
+
+            THEN( "the session is removed" )
+            {
+                REQUIRE( waitFor( [ &widget, &device ]() {
+                    return !widget.isSessionActive( device.devicePath() );
+                } ) );
+            }
+
+            THEN( "the user is told once that the device was disconnected" )
+            {
+                serial_test::processEventsFor( 100 );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "disconnected" ) );
+            }
+        }
+    }
+}
+#endif
