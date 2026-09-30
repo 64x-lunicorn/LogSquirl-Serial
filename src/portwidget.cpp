@@ -271,7 +271,7 @@ void PortWidget::rotateSession( const QString& portName )
 
     const auto newPath = proc->rotateLog();
     if ( newPath.isEmpty() ) {
-        hostNotify( "Failed to rotate log for " + portName );
+        // rotateLog() has reported why through errorOccurred()
         return;
     }
 

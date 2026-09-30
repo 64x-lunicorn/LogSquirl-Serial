@@ -34,6 +34,7 @@
 #include "pseudoterminal.h"
 
 #include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 
 using serial_monitor::PortWidget;
@@ -136,6 +137,40 @@ SCENARIO( "two sessions never write to the same file", "[portwidget]" )
                 REQUIRE_FALSE( started );
                 REQUIRE_FALSE( widget.isSessionActive( secondDevice.devicePath() ) );
                 REQUIRE( host.notifications.size() == 1 );
+            }
+        }
+
+        widget.stopAll();
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a failed rotation is reported once", "[portwidget]" )
+{
+    GIVEN( "a session whose log directory no longer accepts new files" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        QTemporaryDir logDir;
+        REQUIRE( widget.startSession( configFor( device.devicePath() ),
+                                      logDir.filePath( "capture.log" ) ) );
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        WHEN( "rotating the session" )
+        {
+            const auto permissions = QFile::permissions( logDir.path() );
+            QFile::setPermissions( logDir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner );
+            widget.rotateSession( device.devicePath() );
+            QFile::setPermissions( logDir.path(), permissions );
+
+            THEN( "the user is told once, no tab is opened, and the session goes on" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( widget.isSessionActive( device.devicePath() ) );
             }
         }
 

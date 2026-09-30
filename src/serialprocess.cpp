@@ -312,12 +312,6 @@ QString SerialProcess::rotateLog()
     // Flush any pending partial line to the old file before rotating
     flushPartialLine();
 
-    // Close the old temp file (it stays on disk for the old tab)
-    tempFile_.close();
-
-    ++rotationCount_;
-    lineCount_ = 0;
-
     // Generate the rotated file path.  When using the log directory,
     // create a new timestamped file there; otherwise use the temp dir.
     // Either way the file must be new: opening an existing one would
@@ -329,14 +323,36 @@ QString SerialProcess::rotateLog()
     else {
         newPath = tempDir_.filePath( QString( "serial_%1_%2.log" )
                                          .arg( safeFileName( config_.portName ) )
-                                         .arg( rotationCount_ ) );
+                                         .arg( rotationCount_ + 1 ) );
     }
+
+    // Close the old file (it stays on disk for the old tab)
+    const auto oldPath = tempFile_.fileName();
+    tempFile_.close();
+
     tempFile_.setFileName( newPath );
     if ( !tempFile_.open( QIODevice::WriteOnly | QIODevice::NewOnly ) ) {
-        hostLog( LOGSQUIRL_LOG_ERROR,
-                 "Failed to open rotated temp file: " + tempFile_.errorString() );
+        const auto reason = tempFile_.errorString();
+
+        // Keep capturing into the old file: a session left running with a
+        // closed file would silently drop everything from here on.
+        tempFile_.setFileName( oldPath );
+        if ( tempFile_.open( QIODevice::WriteOnly | QIODevice::Append ) ) {
+            Q_EMIT errorOccurred( QString( "Could not rotate the log to %1 (%2); "
+                                           "still writing to %3." )
+                                      .arg( newPath, reason, oldPath ) );
+        }
+        else {
+            Q_EMIT errorOccurred( QString( "Could not rotate the log to %1 (%2), nor reopen "
+                                           "%3 (%4); capture stopped." )
+                                      .arg( newPath, reason, oldPath, tempFile_.errorString() ) );
+            stop();
+        }
         return {};
     }
+
+    ++rotationCount_;
+    lineCount_ = 0;
 
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
                                      .arg( config_.portName )

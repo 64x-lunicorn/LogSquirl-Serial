@@ -53,6 +53,26 @@ QByteArray readFile( const QString& path )
     return file.open( QIODevice::ReadOnly ) ? file.readAll() : QByteArray();
 }
 
+/// Makes a directory read-only for its lifetime, so no file can be created in it.
+class ReadOnlyDir {
+public:
+    explicit ReadOnlyDir( const QString& path )
+        : path_( path )
+        , permissions_( QFile::permissions( path ) )
+    {
+        QFile::setPermissions( path_, QFileDevice::ReadOwner | QFileDevice::ExeOwner );
+    }
+
+    ~ReadOnlyDir()
+    {
+        QFile::setPermissions( path_, permissions_ );
+    }
+
+private:
+    QString path_;
+    QFileDevice::Permissions permissions_;
+};
+
 SerialConfig configFor( const QString& portName )
 {
     SerialConfig cfg;
@@ -196,8 +216,8 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
 
-        SerialProcess proc( configFor( kMissingPort ), savePath );
         QStringList errors;
+        SerialProcess proc( configFor( kMissingPort ), savePath );
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
 
@@ -386,6 +406,67 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
             THEN( "the old file keeps its content" )
             {
                 REQUIRE( readFile( oldPath ) == "first\nsecond\n" );
+            }
+        }
+    }
+
+    GIVEN( "a running session whose log directory no longer accepts new files" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+
+        QStringList errors;
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "first\n" ) );
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+
+        WHEN( "rotating fails" )
+        {
+            QString newPath;
+            {
+                ReadOnlyDir readOnly( logDir.path() );
+                newPath = proc.rotateLog();
+            }
+            REQUIRE( device.send( "after\n" ) );
+
+            THEN( "the failure is reported once and the session keeps running" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( proc.isRunning() );
+            }
+
+            THEN( "later output still reaches the old file" )
+            {
+                REQUIRE( proc.tempFilePath() == savePath );
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
+                REQUIRE( readFile( savePath ) == "first\nafter\n" );
+            }
+        }
+
+        AND_WHEN( "rotating fails and the old file cannot be reopened either" )
+        {
+            int finishedCount = 0;
+            QObject::connect( &proc, &SerialProcess::finished,
+                              [ &finishedCount ]() { ++finishedCount; } );
+            QString newPath;
+            {
+                QFile::setPermissions( savePath, QFileDevice::ReadOwner );
+                ReadOnlyDir readOnly( logDir.path() );
+                newPath = proc.rotateLog();
+            }
+
+            THEN( "the session stops instead of running without a file" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE_FALSE( proc.isRunning() );
+                REQUIRE( finishedCount == 1 );
             }
         }
     }
