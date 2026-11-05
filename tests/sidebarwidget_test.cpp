@@ -32,6 +32,7 @@
 #include "pseudoterminal.h"
 #include "sidebarwidget.h"
 
+#include <QDir>
 #include <QLineEdit>
 #include <QPushButton>
 
@@ -113,6 +114,49 @@ SCENARIO( "the sidebar shares the dialog's port list", "[sidebarwidget]" )
                 {
                     REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore + 1 );
                 }
+            }
+        }
+    }
+}
+
+SCENARIO( "the empty log directory says where captures go", "[sidebarwidget]" )
+{
+    GIVEN( "a host with a configuration directory" )
+    {
+        FakeHost host;
+        PortWidget portWidget;
+
+        WHEN( "the sidebar is created" )
+        {
+            SidebarWidget sidebar( &portWidget );
+            auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
+            REQUIRE( logDir );
+
+            THEN( "the empty field shows the logs directory in it, where they are kept" )
+            {
+                REQUIRE( logDir->text().isEmpty() );
+                REQUIRE( logDir->placeholderText().contains(
+                    QDir::toNativeSeparators( QDir( host.configDir() ).filePath( "logs" ) ) ) );
+                REQUIRE_FALSE( logDir->placeholderText().contains( "temp" ) );
+            }
+        }
+    }
+
+    GIVEN( "a host without a configuration directory" )
+    {
+        FakeHost host;
+        host.hasConfigDir = false;
+        PortWidget portWidget;
+
+        WHEN( "the sidebar is created" )
+        {
+            SidebarWidget sidebar( &portWidget );
+            auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
+            REQUIRE( logDir );
+
+            THEN( "the empty field says that captures are temporary" )
+            {
+                REQUIRE( logDir->placeholderText().contains( "temporary" ) );
             }
         }
     }

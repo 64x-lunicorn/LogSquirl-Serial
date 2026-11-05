@@ -104,7 +104,12 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 4. **Log directory** — Set a directory path in the "Log Directory" section.
    Use the **Browse** button or type a path directly.  Log files are
-   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.
+   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.  Left empty,
+   captures go to the `logs` folder in the plugin's configuration directory,
+   which the empty field shows.  Either way they are kept: the plugin never
+   removes a file in the log directory.  Only when LogSquirl gives the
+   plugin no configuration directory are captures temporary files, removed
+   when LogSquirl quits.
 
 5. **Control characters** — Lines end at `\n`, `\r\n` or a lone `\r`. Every
    other control character but tab (NUL padding, the ESC of a colour code,

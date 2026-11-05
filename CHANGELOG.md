@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration directory gets a message instead of the dialog, which
   would have tried to write `/serial.ini` at the root of the filesystem
   (#41).
+- **The empty log directory says where captures really go.** It read "logs
+  saved to temp directory", but captures are saved, and kept, in `logs` in
+  the plugin's configuration directory; the field now shows that directory
+  (#36).
 
 ## [0.6.0] — 2026-09-30
 

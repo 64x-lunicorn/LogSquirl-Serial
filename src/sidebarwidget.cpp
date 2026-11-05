@@ -49,6 +49,22 @@
 
 namespace serial_monitor {
 
+namespace {
+
+/**
+ * Where captures go while the log directory field is empty: `logs` in the
+ * plugin's configuration directory, where they are kept.  Empty without a
+ * configuration directory: each session then writes to a temporary file,
+ * removed when LogSquirl quits.
+ */
+QString defaultLogDir()
+{
+    const auto cfgDir = SerialProcess::configDir();
+    return cfgDir.isEmpty() ? QString() : cfgDir + "/logs";
+}
+
+} // namespace
+
 // ── Construction ────────────────────────────────────────────────────────
 
 SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
@@ -175,9 +191,16 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     logDirLayout->setContentsMargins( 6, 6, 6, 6 );
 
     logDirEdit_ = new QLineEdit( this );
-    logDirEdit_->setPlaceholderText( "(logs saved to temp directory)" );
-    logDirEdit_->setToolTip( "Directory where log files are saved.\n"
-                             "Files are named: YYYY-MM-dd_HHmmss_<port>.log" );
+    logDirEdit_->setObjectName( "logDir" );
+    const auto defaultDir = defaultLogDir();
+    const auto whenEmpty = defaultDir.isEmpty()
+                               ? QString( "temporary files, removed when LogSquirl quits" )
+                               : QDir::toNativeSeparators( defaultDir );
+    logDirEdit_->setPlaceholderText( "(empty: " + whenEmpty + ")" );
+    logDirEdit_->setToolTip( QString( "Directory where log files are saved and kept.\n"
+                                      "When empty: %1.\n"
+                                      "Files are named: YYYY-MM-dd_HHmmss_<port>.log" )
+                                 .arg( whenEmpty ) );
     logDirLayout->addWidget( logDirEdit_ );
 
     logDirBrowseButton_ = new QPushButton( "\u2026", this );
@@ -455,12 +478,12 @@ QString SidebarWidget::generateSavePath( const QString& portName ) const
 {
     auto dir = logDirEdit_->text().trimmed();
     if ( dir.isEmpty() ) {
-        // Default to <configDir>/logs/ so that captures are always persisted.
-        const auto cfgDir = SerialProcess::configDir();
-        if ( cfgDir.isEmpty() ) {
+        // Default to <configDir>/logs/ so that captures are always persisted;
+        // without a configuration directory, to a temporary file.
+        dir = defaultLogDir();
+        if ( dir.isEmpty() ) {
             return {};
         }
-        dir = cfgDir + "/logs";
     }
 
     // Ensure the directory exists.  A relative one is left as it is:
