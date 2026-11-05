@@ -374,6 +374,74 @@ SCENARIO( "an unplugged device ends its session", "[portwidget]" )
 #endif
 
 #ifdef Q_OS_UNIX
+// Some drivers report a pulled adapter, or a failure of their own, as a
+// ReadError or an UnknownError rather than a ResourceError (Windows
+// USB-serial drivers among them); the read notifier then fires on every
+// pass of the event loop.
+SCENARIO( "any error of an open port ends its session, with one notification", "[portwidget]" )
+{
+    GIVEN( "a running session" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
+        auto* session = widget.findChild<serial_monitor::SerialProcess*>();
+        REQUIRE( session );
+        host.notifications.clear();
+        const auto reportError = [ session ]( QSerialPort::SerialPortError error ) {
+            QMetaObject::invokeMethod( session, "onPortError",
+                                       Q_ARG( QSerialPort::SerialPortError, error ) );
+        };
+
+        WHEN( "the port reports a ReadError, again and again, then an UnknownError" )
+        {
+            for ( int i = 0; i < 5; ++i ) {
+                reportError( QSerialPort::ReadError );
+            }
+            reportError( QSerialPort::UnknownError );
+
+            THEN( "the session is removed, and the user is told once" )
+            {
+                REQUIRE( waitFor( [ &widget, &device ]() {
+                    return !widget.isSessionActive( device.devicePath() );
+                } ) );
+                serial_test::processEventsFor( 100 );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "capture stopped" ) );
+            }
+        }
+
+        WHEN( "the port reports an UnknownError" )
+        {
+            reportError( QSerialPort::UnknownError );
+
+            THEN( "the session is removed" )
+            {
+                REQUIRE( waitFor( [ &widget, &device ]() {
+                    return !widget.isSessionActive( device.devicePath() );
+                } ) );
+            }
+        }
+
+        WHEN( "the port reports a timeout, which only a wait for data can cause" )
+        {
+            reportError( QSerialPort::TimeoutError );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "the session goes on, and nothing is shown" )
+            {
+                REQUIRE( widget.isSessionActive( device.devicePath() ) );
+                REQUIRE( host.notifications.isEmpty() );
+            }
+        }
+
+        widget.stopAll();
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
 SCENARIO( "a log file that cannot be written ends its session", "[portwidget]" )
 {
     GIVEN( "a running session whose log file may grow by a few bytes only" )

@@ -272,7 +272,7 @@ bool SerialProcess::start()
     lineCount_ = 0;
     readBuffer_.clear();
     readAfterCr_ = false;
-    deviceLost_ = false;
+    portFailed_ = false;
     writeFailed_ = false;
 
     // Configure the serial port
@@ -470,6 +470,10 @@ void SerialProcess::failWrite()
         return;
     }
     writeFailed_ = true;
+    // A port that failed has said why the session ends, and stops it.
+    if ( portFailed_ ) {
+        return;
+    }
     Q_EMIT errorOccurred( QString( "Could not write the log file %1 (%2); capture stopped." )
                               .arg( logPath_, tempFile_.errorString() ) );
     // From the event loop, not from within the slot that is reading the port.
@@ -572,27 +576,32 @@ void SerialProcess::onReadyRead()
 
 void SerialProcess::onPortError( QSerialPort::SerialPortError error )
 {
-    // NoError is emitted on successful operations — ignore it.  While the
-    // port is not open, the error comes from open(), and start() reports it.
-    if ( error == QSerialPort::NoError || !port_.isOpen() || deviceLost_ ) {
+    // NoError is emitted on successful operations, and a TimeoutError only
+    // ends a waitFor...() call, which the session never makes: ignore both.
+    // While the port is not open, the error comes from open(), and start()
+    // reports it.  A session that is ending already has said why.
+    if ( error == QSerialPort::NoError || error == QSerialPort::TimeoutError || !port_.isOpen()
+         || portFailed_ || writeFailed_ ) {
         return;
     }
 
+    // Any other error ends the session: the device is gone (unplugged,
+    // powered off) or the driver failed, and the port will not deliver data
+    // again - some drivers report an unplug as a ReadError or an
+    // UnknownError, and the read notifier then fires on every pass of the
+    // event loop.  Stop from the event loop, not from within QSerialPort's
+    // own error handling.  The receiver logs and shows the message; logging
+    // it here as well would report the error twice.
+    portFailed_ = true;
     if ( error == QSerialPort::ResourceError ) {
-        // The device is gone (unplugged, powered off).  The port stays open
-        // but will never deliver data again, so end the session - from the
-        // event loop, not from within QSerialPort's own error handling.
-        deviceLost_ = true;
         Q_EMIT errorOccurred(
             QString( "%1 was disconnected; capture stopped." ).arg( config_.portName ) );
-        QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
-        return;
     }
-
-    // The receiver logs and shows the message; logging it here as well
-    // would report every error twice.
-    Q_EMIT errorOccurred(
-        QString( "Serial port error on %1: %2" ).arg( config_.portName, port_.errorString() ) );
+    else {
+        Q_EMIT errorOccurred( QString( "Serial port error on %1: %2; capture stopped." )
+                                  .arg( config_.portName, port_.errorString() ) );
+    }
+    QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
 }
 
 } // namespace serial_monitor
