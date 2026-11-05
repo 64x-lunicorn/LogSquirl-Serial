@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being created in LogSquirl's working directory (`/` when it was started
   from the Finder or the Dock), so the tab always opens the file the
   capture writes (#35).
+- **Only a regular file is written to.** A save path that is a FIFO, a
+  device or a symbolic link is refused at once with a message, so it can
+  no longer freeze LogSquirl waiting for a reader, nor send the capture
+  elsewhere. A log file the plugin creates is readable by you only (#37).
 
 ## [0.6.0] — 2026-09-30
 

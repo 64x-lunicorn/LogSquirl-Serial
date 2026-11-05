@@ -337,6 +337,12 @@ private:
     /** Write out a buffered partial line, e.g. before the file is closed. */
     void flushPartialLine();
 
+    /// Open @p path for the capture with @p mode, refusing anything that is
+    /// not a regular file: a FIFO would block the UI thread, a symlink lead
+    /// elsewhere, a device take the capture.  A file it creates is readable
+    /// by the user only.  False, with the reason in @p error.
+    bool openLogFile( const QString& path, QIODevice::OpenMode mode, QString& error );
+
     /** Close the log file after a failed start; remove it if start() created it. */
     void discardLogFile();
 
@@ -346,6 +352,9 @@ private:
     QSerialPort port_;
     QTemporaryDir tempDir_;
     QFile tempFile_;
+    /// The log file open in tempFile_, which an open by descriptor leaves
+    /// without a name; empty while none is.
+    QString logPath_;
     QByteArray readBuffer_;    ///< Accumulates partial lines from the port.
     bool readAfterCr_ = false; ///< Whether the data read so far ended with a CR.
     qint64 lineCount_ = 0;

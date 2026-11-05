@@ -37,10 +37,16 @@
 #include "serialprocess.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
 #include <QTemporaryDir>
+
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;
@@ -627,3 +633,144 @@ SCENARIO( "a typed path is made absolute, and a relative one refused", "[serialp
         }
     }
 }
+
+#ifdef Q_OS_UNIX
+SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
+{
+    GIVEN( "a save path that is a FIFO" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto fifo = logDir.filePath( "capture.log" );
+        REQUIRE( ::mkfifo( QFile::encodeName( fifo ).constData(), 0600 ) == 0 );
+        SerialProcess proc( configFor( device.devicePath() ), fifo );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "it is started" )
+        {
+            QElapsedTimer timer;
+            timer.start();
+            const auto started = proc.start();
+
+            THEN( "it is refused at once, without waiting for a reader" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( timer.elapsed() < 2000 );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "not a regular file" ) );
+                REQUIRE( errors.first().contains( fifo ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a character device" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        SerialProcess proc( configFor( device.devicePath() ), "/dev/null" );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it is refused" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "not a regular file" ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a symlink to a file that does not exist" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto target = logDir.filePath( "elsewhere.log" );
+        const auto link = logDir.filePath( "capture.log" );
+        REQUIRE( QFile::link( target, link ) );
+        SerialProcess proc( configFor( device.devicePath() ), link );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it is refused, and the link's target is not created" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE_FALSE( QFileInfo::exists( target ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a symlink to an existing log file" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto target = logDir.filePath( "elsewhere.log" );
+        {
+            QFile existing( target );
+            REQUIRE( existing.open( QIODevice::WriteOnly ) );
+            existing.write( "earlier capture\n" );
+        }
+        const auto link = logDir.filePath( "capture.log" );
+        REQUIRE( QFile::link( target, link ) );
+        SerialProcess proc( configFor( device.devicePath() ), link );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it is refused, and the target and the link are left as they were" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( readFile( target ) == "earlier capture\n" );
+                REQUIRE( QFileInfo( link ).isSymLink() );
+            }
+        }
+    }
+
+    GIVEN( "a save path that does not exist yet" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+
+        WHEN( "it is started" )
+        {
+            REQUIRE( proc.start() );
+
+            THEN( "the file it creates is readable by the user only, and named as the log file" )
+            {
+                struct stat info{};
+                REQUIRE( ::stat( QFile::encodeName( savePath ).constData(), &info ) == 0 );
+                REQUIRE( ( info.st_mode & 0777 ) == 0600 );
+                REQUIRE( proc.tempFilePath() == savePath );
+            }
+
+            AND_WHEN( "the device sends a line" )
+            {
+                REQUIRE( device.send( "first\n" ) );
+
+                THEN( "it reaches the file" )
+                {
+                    REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+                    REQUIRE( readFile( savePath ) == "first\n" );
+                }
+            }
+
+            proc.stop();
+        }
+    }
+}
+#endif
