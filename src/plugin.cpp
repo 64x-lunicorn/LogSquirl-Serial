@@ -169,6 +169,18 @@ static void showSerialDialog( void* /* userData */ )
 /// show them in the open panels.
 static void configureDefaults( QWidget* parent )
 {
+    // Without a configuration directory the settings would go to
+    // "/serial.ini", the root of the filesystem: nothing can be saved.
+    const auto configDir = serial_monitor::SerialProcess::configDir();
+    if ( configDir.isEmpty() ) {
+        const auto message = QStringLiteral( "The Serial Monitor defaults cannot be changed: "
+                                             "LogSquirl gave the plugin no configuration "
+                                             "directory to save them in." );
+        serial_monitor::hostLog( LOGSQUIRL_LOG_WARNING, message );
+        serial_monitor::hostNotify( message );
+        return;
+    }
+
     const auto defaults = serial_monitor::SerialProcess::defaultConfig();
 
     QDialog dialog( parent );
@@ -194,11 +206,17 @@ static void configureDefaults( QWidget* parent )
         return;
     }
 
-    const auto configDir = serial_monitor::SerialProcess::configDir();
     QSettings settings( configDir + "/serial.ini", QSettings::IniFormat );
     settings.setValue( "serial/defaultBaud", baudSpin->value() );
     settings.setValue( "serial/timestamps", timestampCheckBox->isChecked() );
     settings.sync();
+    if ( settings.status() != QSettings::NoError ) {
+        const auto message = QString( "The Serial Monitor defaults could not be saved to %1." )
+                                 .arg( settings.fileName() );
+        serial_monitor::hostLog( LOGSQUIRL_LOG_ERROR, message );
+        serial_monitor::hostNotify( message );
+        return;
+    }
     serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
                              QString( "Default baud rate set to %1, timestamps %2" )
                                  .arg( baudSpin->value() )

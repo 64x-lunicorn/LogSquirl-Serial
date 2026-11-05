@@ -54,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device had not taken yet, held back by hardware flow control or a pulled
   cable, could keep Stop or LogSquirl's shutdown waiting up to 30 seconds
   while the port closed; it is now discarded first (#40).
+- **Configure says when the defaults could not be saved.** The dialog
+  closed as if it had saved them when the settings file could not be
+  written; it now tells you. A LogSquirl that gives the plugin no
+  configuration directory gets a message instead of the dialog, which
+  would have tried to write `/serial.ini` at the root of the filesystem
+  (#41).
 
 ## [0.6.0] — 2026-09-30
 
