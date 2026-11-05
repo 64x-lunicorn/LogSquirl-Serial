@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An error in the plugin no longer ends LogSquirl.** An exception in the
+  plugin's start, shutdown, Configure or its menu entry is logged instead
+  of escaping into LogSquirl; a start that fails is undone, the sidebar tab
+  unregistered before its widget goes.
+
 ## [0.6.0] — 2026-09-30
 
 ### Changed
