@@ -358,6 +358,10 @@ void SerialProcess::stop()
         return;
     }
 
+    // Output the device has not taken yet (flow control holding it back, a
+    // pulled cable) is dropped: the last close of a tty waits for it to
+    // drain, on Linux up to 30 seconds, and this runs on the UI thread.
+    port_.clear( QSerialPort::Output );
     port_.close();
 
     // Flush any remaining partial line

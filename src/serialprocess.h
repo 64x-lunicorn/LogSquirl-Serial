@@ -229,7 +229,10 @@ public:
      */
     bool start();
 
-    /** Close the serial port.  No-op if not running. */
+    /**
+     * Close the serial port, dropping output the device has not taken yet,
+     * so that closing cannot wait for it.  No-op if not running.
+     */
     void stop();
 
     /**

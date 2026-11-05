@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent part of a line, the `[TX]` line was written before it and the two
   parts joined below, under a later timestamp. The part received so far is
   now written first, as a line of its own (#39).
+- **Stopping a session no longer waits for unsent output.** A command the
+  device had not taken yet, held back by hardware flow control or a pulled
+  cable, could keep Stop or LogSquirl's shutdown waiting up to 30 seconds
+  while the port closed; it is now discarded first (#40).
 
 ## [0.6.0] — 2026-09-30
 
