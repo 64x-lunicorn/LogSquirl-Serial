@@ -515,6 +515,14 @@ void SidebarWidget::saveLogDir()
     }
     QSettings settings( cfgDir + "/serial.ini", QSettings::IniFormat );
     settings.setValue( "serial/logDir", logDirEdit_->text().trimmed() );
+    settings.sync();
+    if ( settings.status() != QSettings::NoError ) {
+        const auto message = QString( "The Serial Monitor log directory could not be saved to %1; "
+                                      "it is used until LogSquirl quits." )
+                                 .arg( settings.fileName() );
+        hostLog( LOGSQUIRL_LOG_WARNING, message );
+        hostNotify( message );
+    }
 }
 
 } // namespace serial_monitor

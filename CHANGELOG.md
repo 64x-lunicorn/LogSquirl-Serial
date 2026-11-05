@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The sidebar lists the ports that really capture.** When one session
   ended and another started within the same second, the list kept the
   ended port, with buttons that did nothing, and left out the new one (#45).
+- **A log directory that cannot be saved is reported.** When the
+  configuration directory is read-only or full, the sidebar says so instead
+  of forgetting the typed log directory on the next start without a word (#46).
 
 ## [0.6.0] — 2026-09-30
 

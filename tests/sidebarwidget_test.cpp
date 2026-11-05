@@ -30,6 +30,7 @@
 #include "fakehost.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
+#include "readonlydir.h"
 #include "sidebarwidget.h"
 
 #include <QDir>
@@ -214,3 +215,38 @@ SCENARIO( "the empty log directory says where captures go", "[sidebarwidget]" )
         }
     }
 }
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log directory that cannot be saved is reported", "[sidebarwidget]" )
+{
+    GIVEN( "a sidebar whose configuration directory cannot be written" )
+    {
+        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
+        FakeHost host;
+        PortWidget portWidget;
+        SidebarWidget sidebar( &portWidget );
+        auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
+        REQUIRE( logDir );
+        host.notifications.clear();
+
+        WHEN( "the user types a log directory" )
+        {
+            logDir->setText( QDir::homePath() );
+            {
+                const serial_test::ReadOnlyDir readOnly( host.configDir() );
+                Q_EMIT logDir->editingFinished();
+            }
+
+            THEN( "the user is told once that it was not saved" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.front().contains( "could not be saved" ) );
+            }
+        }
+    }
+}
+#endif
