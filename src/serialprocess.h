@@ -149,7 +149,9 @@ public:
      * more data arrives, unless it is longer than @p maxLineLength: then
      * it is returned as a line of its own, so that a stream that never
      * ends its lines (binary data, a progress display) cannot make the
-     * buffer grow without bound.
+     * buffer grow without bound.  Such a line ends before a UTF-8
+     * character whose last bytes have not arrived yet; they stay in the
+     * buffer, so that the character is not cut in two.
      *
      * Extracted as a static helper so unit tests can exercise the line
      * splitting without real hardware.
@@ -163,6 +165,16 @@ public:
      */
     static QList<QByteArray> takeLines( QByteArray& buffer, bool& afterCr,
                                         qsizetype maxLineLength = kMaxLineLength );
+
+    /**
+     * Return @p line with every C0 control character but tab (NUL, ESC,
+     * the bell, …) written as a visible `\xNN` escape, two upper-case hex
+     * digits.  The log file then holds text only, so that NUL padding or
+     * garbage a device sends cannot make LogSquirl take the whole file for
+     * UTF-16 or another encoding.  Other bytes, a backslash among them,
+     * are left as they are.
+     */
+    static QByteArray escapeControls( const QByteArray& line );
 
     /**
      * Return a sensible default configuration (115200 8N1, no FC, timestamps on).
@@ -191,6 +203,15 @@ public:
      */
     static QString configDir();
 
+    /**
+     * The path a user typed, made absolute: a leading `~` is the home
+     * directory, and the path is cleaned.  Empty for a path that is still
+     * relative, as `open_file()` takes absolute paths only and LogSquirl's
+     * working directory is nothing the user chose (`/` when started from
+     * the Finder or the Dock).
+     */
+    static QString absoluteUserPath( const QString& path );
+
     // ── Instance methods ─────────────────────────────────────────────
 
     /**
@@ -198,7 +219,8 @@ public:
      * already running.
      *
      * A save path is appended to, so an earlier capture in that file is
-     * never overwritten.
+     * never overwritten.  One that is not a full path (absoluteUserPath())
+     * is refused before anything is written.
      *
      * On failure the reason has been emitted through errorOccurred(), and
      * a log file that start() created is removed again.
@@ -207,7 +229,10 @@ public:
      */
     bool start();
 
-    /** Close the serial port.  No-op if not running. */
+    /**
+     * Close the serial port, dropping output the device has not taken yet,
+     * so that closing cannot wait for it.  No-op if not running.
+     */
     void stop();
 
     /**
@@ -215,7 +240,8 @@ public:
      *
      * Appends the configured line ending (txLineEnding) to the data before
      * transmission.  The sent command is also written to the log file with
-     * a [TX] marker so it appears in the LogSquirl tab.
+     * a [TX] marker so it appears in the LogSquirl tab, after the part of a
+     * line received so far, which is written as a line of its own.
      *
      * @param data  Raw bytes to send (line ending is appended automatically).
      * @return true if the data was written successfully, false otherwise.
@@ -307,17 +333,33 @@ private Q_SLOTS:
     void onReadyRead();
 
     /**
-     * Handle serial port errors.  A ResourceError (device unplugged)
+     * Handle serial port errors.  Any error of the open port but a
+     * TimeoutError (device unplugged, driver failure) is reported once and
      * stops the session.
      */
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
-    /** Write one line to the log file, timestamped if configured. */
-    void writeLine( const QByteArray& line );
+    /// Write one line to the log file, timestamped if configured and with
+    /// its control characters escaped (escapeControls()); false,
+    /// after failWrite(), if the log file cannot be written.
+    bool writeLine( const QByteArray& line );
+
+    /// Flush the log file; false, after failWrite(), if it cannot be written.
+    bool flushLogFile();
+
+    /// The log file cannot be written (disk full, volume gone): say so once
+    /// and stop the session, rather than drop every line from here on.
+    void failWrite();
 
     /** Write out a buffered partial line, e.g. before the file is closed. */
     void flushPartialLine();
+
+    /// Open @p path for the capture with @p mode, refusing anything that is
+    /// not a regular file: a FIFO would block the UI thread, a symlink lead
+    /// elsewhere, a device take the capture.  A file it creates is readable
+    /// by the user only.  False, with the reason in @p error.
+    bool openLogFile( const QString& path, QIODevice::OpenMode mode, QString& error );
 
     /** Close the log file after a failed start; remove it if start() created it. */
     void discardLogFile();
@@ -328,13 +370,17 @@ private:
     QSerialPort port_;
     QTemporaryDir tempDir_;
     QFile tempFile_;
+    /// The log file open in tempFile_, which an open by descriptor leaves
+    /// without a name; empty while none is.
+    QString logPath_;
     QByteArray readBuffer_;    ///< Accumulates partial lines from the port.
     bool readAfterCr_ = false; ///< Whether the data read so far ended with a CR.
     qint64 lineCount_ = 0;
     int rotationCount_ = 0;       ///< Incremented on each rotateLog() call.
     bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
     bool createdLogFile_ = false; ///< True when start() created the log file.
-    bool deviceLost_ = false;     ///< True once the port reported the device gone.
+    bool portFailed_ = false;     ///< True once the open port reported an error.
+    bool writeFailed_ = false;    ///< True once a write to the log file failed.
 };
 
 } // namespace serial_monitor

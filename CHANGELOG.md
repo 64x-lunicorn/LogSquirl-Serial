@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The icon matches the other LogSquirl plugins.** The connector is centred
+  and drawn with the same line width as the other plugin icons (#44).
 - **Built against the plugin API of LogSquirl 26.12.** LogSquirl 26.11 and
   later start the plugin through `logsquirl_plugin_init_ex()` and tell it
   which of their functions it may use; LogSquirl 26.10 starts it as before,
@@ -18,6 +20,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin's start, shutdown, Configure or its menu entry is logged instead
   of escaping into LogSquirl; a start that fails is undone, the sidebar tab
   unregistered before its widget goes.
+- **A log file that cannot be written stops the capture.** When the disk is
+  full, the log directory's drive goes away or the file cannot be written
+  for another reason, the session stops and says once which file could not
+  be written, instead of showing a running capture while every line is
+  lost (#32).
+- **A save path or log directory is a full path.** A leading `~` is your
+  home directory; a relative path is refused with a message instead of
+  being created in LogSquirl's working directory (`/` when it was started
+  from the Finder or the Dock), so the tab always opens the file the
+  capture writes (#35).
+- **Only a regular file is written to.** A save path that is a FIFO, a
+  device or a symbolic link is refused at once with a message, so it can
+  no longer freeze LogSquirl waiting for a reader, nor send the capture
+  elsewhere. On Linux and macOS a log file the plugin creates is readable
+  by you only (#37).
+- **Any error of an open port ends its session, with one notification.**
+  Some drivers report a pulled adapter or a failure of their own as a read
+  or unknown error rather than as a lost device; the session then kept
+  running and showed a new notification on every pass of the event loop.
+  Now every such error stops the capture and is shown once (#34).
+- **Binary bytes from the port can no longer change how LogSquirl decodes
+  the log.** NUL padding, colour codes and the other control characters but
+  tab are written as a visible escape such as `\x00` or `\x1B`, two
+  upper-case hex digits, instead of raw, where they could make LogSquirl
+  take the whole file for UTF-16 or another encoding. A line forced out
+  after 64 KiB without a line end no longer cuts a UTF-8 character in two
+  (#38).
+- **A sent command no longer splits a received line.** When the device had
+  sent part of a line, the `[TX]` line was written before it and the two
+  parts joined below, under a later timestamp. The part received so far is
+  now written first, as a line of its own (#39).
+- **Stopping a session no longer waits for unsent output.** A command the
+  device had not taken yet, held back by hardware flow control or a pulled
+  cable, could keep Stop or LogSquirl's shutdown waiting up to 30 seconds
+  while the port closed; it is now discarded first (#40).
+- **Configure says when the defaults could not be saved.** The dialog
+  closed as if it had saved them when the settings file could not be
+  written; it now tells you. A LogSquirl that gives the plugin no
+  configuration directory gets a message instead of the dialog, which
+  would have tried to write `/serial.ini` at the root of the filesystem
+  (#41).
+- **The empty log directory says where captures really go.** It read "logs
+  saved to temp directory", but captures are saved, and kept, in `logs` in
+  the plugin's configuration directory; the field now shows that directory
+  (#36).
+- **The sidebar lists the ports that really capture.** When one session
+  ended and another started within the same second, the list kept the
+  ended port, with buttons that did nothing, and left out the new one (#45).
+- **A log directory that cannot be saved is reported.** When the
+  configuration directory is read-only or full, the sidebar says so instead
+  of forgetting the typed log directory on the next start without a word (#46).
 
 ## [0.6.0] — 2026-09-30
 

@@ -30,14 +30,23 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "filesizelimit.h"
 #include "plugin.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
 #include "serialprocess.h"
 
+#include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 #include <QTemporaryDir>
+
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;
@@ -278,6 +287,78 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
                 REQUIRE( device.send( "first\r\nsecond\n" ) );
                 REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
                 REQUIRE( readFile( proc.tempFilePath() ) == "first\nsecond\n" );
+            }
+        }
+    }
+
+    GIVEN( "a device that boots with NUL padding and baud-mismatch garbage" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+
+        WHEN( "it sends them before its first line of text" )
+        {
+            REQUIRE( proc.start() );
+            REQUIRE( device.send( QByteArray( "\0\0\0\x02\xF8\x1B\x7F\x80ready\n", 14 ) ) );
+
+            THEN( "the control bytes are written as visible escapes, the text as it came" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+                REQUIRE( readFile( proc.tempFilePath() )
+                         == "\\x00\\x00\\x00\\x02\xF8\\x1B\x7F\x80ready\n" );
+            }
+        }
+    }
+
+    GIVEN( "a device that has sent part of a line" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+        REQUIRE( proc.start() );
+        // Sent with a complete line, so the session has read the part once
+        // it has written that line.
+        REQUIRE( device.send( "boot\nfoo" ) );
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+
+        WHEN( "a command is sent, and the device then ends its line" )
+        {
+            REQUIRE( proc.sendData( "cmd" ) );
+            REQUIRE( device.send( "bar\n" ) );
+
+            THEN( "the part received before the command stays before it in the log" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
+                REQUIRE( readFile( proc.tempFilePath() ) == "boot\nfoo\n[TX] cmd\nbar\n" );
+            }
+        }
+    }
+
+    GIVEN( "a device that has sent part of a line, ending inside a character" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "boot\n25 \xC2" ) ); // the first byte of a degree sign
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+
+        WHEN( "a command is sent, and the device then ends its line" )
+        {
+            REQUIRE( proc.sendData( "cmd" ) );
+            REQUIRE( device.send( "\xB0"
+                                  "C\n" ) );
+
+            THEN( "the character is kept whole, after the command" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
+                REQUIRE( readFile( proc.tempFilePath() )
+                         == "boot\n25 \n[TX] cmd\n\xC2\xB0"
+                            "C\n" );
             }
         }
     }
@@ -523,6 +604,244 @@ SCENARIO( "destroying a running session does not call back its owner", "[serialp
             {
                 REQUIRE( signalCount == 0 );
             }
+        }
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log file that cannot be written stops the session and says why", "[serialprocess]" )
+{
+    GIVEN( "a running session whose log file may grow by a few bytes only" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+        int finishedCount = 0;
+        QObject::connect( &proc, &SerialProcess::finished,
+                          [ &finishedCount ]() { ++finishedCount; } );
+        REQUIRE( proc.start() );
+        serial_test::FileSizeLimit limit( 8 );
+        REQUIRE( limit.isActive() );
+
+        WHEN( "the device sends more than that, line after line" )
+        {
+            REQUIRE( device.send( "first line\nsecond line\nthird line\n" ) );
+            const bool stopped = waitFor( [ &proc ]() { return !proc.isRunning(); } );
+            serial_test::processEventsFor( 100 );
+            limit.lift();
+
+            THEN( "the session stops, and the failure is reported once, naming the file" )
+            {
+                REQUIRE( stopped );
+                REQUIRE( finishedCount == 1 );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "Could not write the log file" ) );
+                REQUIRE( errors.first().contains( savePath ) );
+            }
+        }
+
+        WHEN( "a command is sent" )
+        {
+            REQUIRE( proc.sendData( "reboot with a long command line" ) );
+            const bool stopped = waitFor( [ &proc ]() { return !proc.isRunning(); } );
+            limit.lift();
+
+            THEN( "the session stops, and the failure is reported once" )
+            {
+                REQUIRE( stopped );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "Could not write the log file" ) );
+            }
+        }
+    }
+}
+#endif
+
+SCENARIO( "a typed path is made absolute, and a relative one refused", "[serialprocess]" )
+{
+    THEN( "~ is the home directory, and the path is cleaned" )
+    {
+        REQUIRE( SerialProcess::absoluteUserPath( "~" ) == QDir::homePath() );
+        REQUIRE( SerialProcess::absoluteUserPath( " ~/serial/x.log " )
+                 == QDir::homePath() + "/serial/x.log" );
+        const auto root = QDir::rootPath();
+        REQUIRE( SerialProcess::absoluteUserPath( root + "a/../b/c.log" ) == root + "b/c.log" );
+    }
+
+    THEN( "a relative path, or none, is empty" )
+    {
+        REQUIRE( SerialProcess::absoluteUserPath( "out.log" ).isEmpty() );
+        REQUIRE( SerialProcess::absoluteUserPath( "serial/out.log" ).isEmpty() );
+        REQUIRE( SerialProcess::absoluteUserPath( "~user/x.log" ).isEmpty() );
+        REQUIRE( SerialProcess::absoluteUserPath( "  " ).isEmpty() );
+    }
+
+    GIVEN( "a session with a relative save path" )
+    {
+        FakeHost host;
+        SerialProcess proc( configFor( kMissingPort ), "relative-capture.log" );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it does not start, says why, and creates nothing in the working directory" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "not a full path" ) );
+                REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
+                REQUIRE( proc.tempFilePath().isEmpty() );
+            }
+        }
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
+{
+    GIVEN( "a save path that is a FIFO" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto fifo = logDir.filePath( "capture.log" );
+        REQUIRE( ::mkfifo( QFile::encodeName( fifo ).constData(), 0600 ) == 0 );
+        SerialProcess proc( configFor( device.devicePath() ), fifo );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "it is started" )
+        {
+            QElapsedTimer timer;
+            timer.start();
+            const auto started = proc.start();
+
+            THEN( "it is refused at once, without waiting for a reader" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( timer.elapsed() < 2000 );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "not a regular file" ) );
+                REQUIRE( errors.first().contains( fifo ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a character device" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        SerialProcess proc( configFor( device.devicePath() ), "/dev/null" );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it is refused" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "not a regular file" ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a symlink to a file that does not exist" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto target = logDir.filePath( "elsewhere.log" );
+        const auto link = logDir.filePath( "capture.log" );
+        REQUIRE( QFile::link( target, link ) );
+        SerialProcess proc( configFor( device.devicePath() ), link );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it is refused, and the link's target is not created" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE_FALSE( QFileInfo::exists( target ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a symlink to an existing log file" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto target = logDir.filePath( "elsewhere.log" );
+        {
+            QFile existing( target );
+            REQUIRE( existing.open( QIODevice::WriteOnly ) );
+            existing.write( "earlier capture\n" );
+        }
+        const auto link = logDir.filePath( "capture.log" );
+        REQUIRE( QFile::link( target, link ) );
+        SerialProcess proc( configFor( device.devicePath() ), link );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it is refused, and the target and the link are left as they were" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( readFile( target ) == "earlier capture\n" );
+                REQUIRE( QFileInfo( link ).isSymLink() );
+            }
+        }
+    }
+
+    GIVEN( "a save path that does not exist yet" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+
+        WHEN( "it is started" )
+        {
+            REQUIRE( proc.start() );
+
+            THEN( "the file it creates is readable by the user only, and named as the log file" )
+            {
+                struct stat info{};
+                REQUIRE( ::stat( QFile::encodeName( savePath ).constData(), &info ) == 0 );
+                REQUIRE( ( info.st_mode & 0777 ) == 0600 );
+                REQUIRE( proc.tempFilePath() == savePath );
+            }
+
+            AND_WHEN( "the device sends a line" )
+            {
+                REQUIRE( device.send( "first\n" ) );
+
+                THEN( "it reaches the file" )
+                {
+                    REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+                    REQUIRE( readFile( savePath ) == "first\n" );
+                }
+            }
+
+            proc.stop();
         }
     }
 }

@@ -73,8 +73,10 @@ public:
                 throw std::runtime_error( "the log is full" );
             }
         };
-        api_.get_config_dir
-            = []( void* handle ) { return self( handle )->configDirUtf8_.constData(); };
+        api_.get_config_dir = []( void* handle ) -> const char* {
+            auto* host = self( handle );
+            return host->hasConfigDir ? host->configDirUtf8_.constData() : nullptr;
+        };
         api_.show_notification = []( void* handle, const char* message ) {
             self( handle )->notifications << QString::fromUtf8( message );
         };
@@ -134,6 +136,9 @@ public:
     QList<void*> sidebarTabs; ///< The widgets registered as sidebar tabs.
     /// register_sidebar_tab() throws, as a host out of room might.
     bool failSidebarTab = false;
+    /// get_config_dir() returns the config directory; NULL, as a host
+    /// without one does, when false.
+    bool hasConfigDir = true;
     /// log_message() throws after logging a message containing this.
     QString failLogContaining;
     QStringList openedFiles;

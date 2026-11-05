@@ -30,9 +30,13 @@
 #include "fakehost.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
+#include "readonlydir.h"
 #include "sidebarwidget.h"
 
+#include <QDir>
+#include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 
 using serial_monitor::PortWidget;
@@ -84,6 +88,57 @@ SCENARIO( "a command is only sent to the selected port", "[sidebarwidget]" )
         portWidget.stopAll();
     }
 }
+
+namespace {
+
+/// The ports the sidebar's session list shows, in order.
+QStringList shownSessions( const SidebarWidget& sidebar )
+{
+    QStringList ports;
+    const auto* list = sidebar.findChild<QListWidget*>();
+    REQUIRE( list );
+    for ( int i = 0; i < list->count(); ++i ) {
+        const auto* label = list->itemWidget( list->item( i ) )->findChild<QLabel*>();
+        REQUIRE( label );
+        ports << label->text();
+    }
+    return ports;
+}
+
+} // namespace
+
+SCENARIO( "the session list shows the ports that really capture", "[sidebarwidget]" )
+{
+    GIVEN( "a capture the sidebar lists" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal first;
+        serial_test::PseudoTerminal second;
+        PortWidget portWidget;
+        SidebarWidget sidebar( &portWidget );
+
+        SerialConfig cfg;
+        cfg.portName = first.devicePath();
+        REQUIRE( portWidget.startSession( cfg ) );
+        QMetaObject::invokeMethod( &sidebar, "refreshSessionList" );
+        REQUIRE( shownSessions( sidebar ) == QStringList{ first.devicePath() } );
+
+        WHEN( "it ends and another starts before the next refresh" )
+        {
+            portWidget.stopSession( first.devicePath() );
+            cfg.portName = second.devicePath();
+            REQUIRE( portWidget.startSession( cfg ) );
+            QMetaObject::invokeMethod( &sidebar, "refreshSessionList" );
+
+            THEN( "the list shows the new port, not the ended one" )
+            {
+                REQUIRE( shownSessions( sidebar ) == QStringList{ second.devicePath() } );
+            }
+        }
+
+        portWidget.stopAll();
+    }
+}
 #endif
 
 SCENARIO( "the sidebar shares the dialog's port list", "[sidebarwidget]" )
@@ -117,3 +172,95 @@ SCENARIO( "the sidebar shares the dialog's port list", "[sidebarwidget]" )
         }
     }
 }
+
+SCENARIO( "the empty log directory says where captures go", "[sidebarwidget]" )
+{
+    GIVEN( "a host with a configuration directory" )
+    {
+        FakeHost host;
+        PortWidget portWidget;
+
+        WHEN( "the sidebar is created" )
+        {
+            SidebarWidget sidebar( &portWidget );
+            auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
+            REQUIRE( logDir );
+
+            THEN( "the empty field shows the logs directory in it, where they are kept" )
+            {
+                REQUIRE( logDir->text().isEmpty() );
+                REQUIRE( logDir->placeholderText().contains(
+                    QDir::toNativeSeparators( QDir( host.configDir() ).filePath( "logs" ) ) ) );
+                REQUIRE_FALSE( logDir->placeholderText().contains( "temp" ) );
+            }
+        }
+    }
+
+    GIVEN( "a host without a configuration directory" )
+    {
+        FakeHost host;
+        host.hasConfigDir = false;
+        PortWidget portWidget;
+
+        WHEN( "the sidebar is created" )
+        {
+            SidebarWidget sidebar( &portWidget );
+            auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
+            REQUIRE( logDir );
+
+            THEN( "the empty field says that captures are temporary" )
+            {
+                REQUIRE( logDir->placeholderText().contains( "temporary" ) );
+            }
+        }
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log directory that cannot be saved is reported", "[sidebarwidget]" )
+{
+    GIVEN( "a sidebar whose configuration directory cannot be written" )
+    {
+        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
+        FakeHost host;
+        PortWidget portWidget;
+        SidebarWidget sidebar( &portWidget );
+        auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
+        REQUIRE( logDir );
+        host.notifications.clear();
+
+        WHEN( "the user types a log directory" )
+        {
+            logDir->setText( QDir::homePath() );
+            {
+                const serial_test::ReadOnlyDir readOnly( host.configDir() );
+                Q_EMIT logDir->editingFinished();
+            }
+
+            THEN( "the user is told once that it was not saved" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.front().contains( "could not be saved" ) );
+            }
+
+            AND_WHEN( "the user edits it again" )
+            {
+                {
+                    const serial_test::ReadOnlyDir readOnly( host.configDir() );
+                    logDir->setText( QDir::tempPath() );
+                    Q_EMIT logDir->editingFinished();
+                }
+
+                THEN( "the user is not told again" )
+                {
+                    REQUIRE( host.notifications.size() == 1 );
+                }
+            }
+        }
+    }
+}
+#endif

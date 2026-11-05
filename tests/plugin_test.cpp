@@ -34,6 +34,7 @@
 #include "plugin.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
+#include "readonlydir.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -145,6 +146,83 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
 
         logsquirl_plugin_shutdown();
     }
+}
+
+SCENARIO( "the Configure dialog never saves where it should not", "[plugin]" )
+{
+    GIVEN( "an initialised plugin in a host without a configuration directory" )
+    {
+        FakeHost host;
+        host.hasConfigDir = false;
+        REQUIRE(
+            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
+            == 0 );
+        host.notifications.clear();
+
+        WHEN( "the user opens Plugins → Configure" )
+        {
+            auto dialogShown = std::make_shared<bool>( false );
+            QTimer::singleShot( 0, [ dialogShown ]() {
+                if ( auto* dialog = qobject_cast<QDialog*>( QApplication::activeModalWidget() ) ) {
+                    *dialogShown = true;
+                    dialog->accept();
+                }
+            } );
+            logsquirl_plugin_configure( nullptr );
+            serial_test::processEventsFor( 50 );
+
+            THEN( "nothing can be saved, so no dialog is shown, and the user is told why" )
+            {
+                REQUIRE_FALSE( *dialogShown );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "no configuration directory" ) );
+                REQUIRE( host.logs.filter( "no configuration directory" ).size() == 1 );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "an initialised plugin whose configuration directory cannot be written" )
+    {
+        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
+        FakeHost host;
+        REQUIRE(
+            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
+            == 0 );
+        host.notifications.clear();
+
+        WHEN( "the user saves new defaults in Plugins → Configure" )
+        {
+            QTimer::singleShot( 0, []() {
+                if ( auto* dialog = qobject_cast<QDialog*>( QApplication::activeModalWidget() ) ) {
+                    if ( auto* timestamps = dialog->findChild<QCheckBox*>() ) {
+                        timestamps->setChecked( false );
+                    }
+                    dialog->accept();
+                }
+            } );
+            {
+                const serial_test::ReadOnlyDir readOnly( host.configDir() );
+                logsquirl_plugin_configure( nullptr );
+            }
+
+            THEN( "the user is told that they were not saved" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "could not be saved" ) );
+                REQUIRE( host.logs.filter( "Default baud rate set" ).isEmpty() );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+#endif
 }
 
 #ifdef Q_OS_UNIX

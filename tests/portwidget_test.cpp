@@ -30,6 +30,7 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "filesizelimit.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
@@ -89,7 +90,56 @@ SCENARIO( "a session is only accepted when its port opens", "[portwidget]" )
         }
     }
 
+    GIVEN( "a save path that is not a full path" )
+    {
+        FakeHost host;
+        PortWidget widget;
+        const QString port = "logsquirl-test-no-such-port";
+
+        WHEN( "starting a session with it" )
+        {
+            const auto started = widget.startSession( configFor( port ), "relative-capture.log" );
+
+            THEN( "the session is rejected before anything is written, and the user told why" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "not a full path" ) );
+            }
+        }
+    }
+
 #ifdef Q_OS_UNIX
+    GIVEN( "a device and a save path in the home directory, spelled with ~" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        QTemporaryDir home;
+        const auto oldHome = qgetenv( "HOME" );
+        qputenv( "HOME", QFile::encodeName( home.path() ) );
+
+        WHEN( "starting a session" )
+        {
+            const auto started
+                = widget.startSession( configFor( device.devicePath() ), "~/serial/capture.log" );
+            qputenv( "HOME", oldHome );
+            widget.stopAll();
+
+            THEN( "the capture goes to the home directory, and the tab opens its full path" )
+            {
+                const auto expected = QDir( home.path() ).filePath( "serial/capture.log" );
+                REQUIRE( started );
+                REQUIRE( QFileInfo::exists( expected ) );
+                REQUIRE( host.openedFiles == QStringList{ expected } );
+            }
+        }
+
+        qputenv( "HOME", oldHome );
+    }
+
     GIVEN( "a device on a working port" )
     {
         FakeHost host;
@@ -317,6 +367,108 @@ SCENARIO( "an unplugged device ends its session", "[portwidget]" )
                 serial_test::processEventsFor( 100 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "disconnected" ) );
+            }
+        }
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+// Some drivers report a pulled adapter, or a failure of their own, as a
+// ReadError or an UnknownError rather than a ResourceError (Windows
+// USB-serial drivers among them); the read notifier then fires on every
+// pass of the event loop.
+SCENARIO( "any error of an open port ends its session, with one notification", "[portwidget]" )
+{
+    GIVEN( "a running session" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
+        auto* session = widget.findChild<serial_monitor::SerialProcess*>();
+        REQUIRE( session );
+        host.notifications.clear();
+        const auto reportError = [ session ]( QSerialPort::SerialPortError error ) {
+            QMetaObject::invokeMethod( session, "onPortError",
+                                       Q_ARG( QSerialPort::SerialPortError, error ) );
+        };
+
+        WHEN( "the port reports a ReadError, again and again, then an UnknownError" )
+        {
+            for ( int i = 0; i < 5; ++i ) {
+                reportError( QSerialPort::ReadError );
+            }
+            reportError( QSerialPort::UnknownError );
+
+            THEN( "the session is removed, and the user is told once" )
+            {
+                REQUIRE( waitFor( [ &widget, &device ]() {
+                    return !widget.isSessionActive( device.devicePath() );
+                } ) );
+                serial_test::processEventsFor( 100 );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "capture stopped" ) );
+            }
+        }
+
+        WHEN( "the port reports an UnknownError" )
+        {
+            reportError( QSerialPort::UnknownError );
+
+            THEN( "the session is removed" )
+            {
+                REQUIRE( waitFor( [ &widget, &device ]() {
+                    return !widget.isSessionActive( device.devicePath() );
+                } ) );
+            }
+        }
+
+        WHEN( "the port reports a timeout, which only a wait for data can cause" )
+        {
+            reportError( QSerialPort::TimeoutError );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "the session goes on, and nothing is shown" )
+            {
+                REQUIRE( widget.isSessionActive( device.devicePath() ) );
+                REQUIRE( host.notifications.isEmpty() );
+            }
+        }
+
+        widget.stopAll();
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log file that cannot be written ends its session", "[portwidget]" )
+{
+    GIVEN( "a running session whose log file may grow by a few bytes only" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        QTemporaryDir logDir;
+        REQUIRE( widget.startSession( configFor( device.devicePath() ),
+                                      logDir.filePath( "capture.log" ) ) );
+        host.notifications.clear();
+        serial_test::FileSizeLimit limit( 8 );
+        REQUIRE( limit.isActive() );
+
+        WHEN( "the device sends more than that" )
+        {
+            REQUIRE( device.send( "first line\nsecond line\n" ) );
+            const bool removed = waitFor(
+                [ &widget, &device ]() { return !widget.isSessionActive( device.devicePath() ); } );
+            serial_test::processEventsFor( 100 );
+            limit.lift();
+
+            THEN( "the session is removed, and the user is told once why" )
+            {
+                REQUIRE( removed );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "Could not write the log file" ) );
             }
         }
     }

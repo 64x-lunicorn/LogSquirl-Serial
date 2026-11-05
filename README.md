@@ -104,12 +104,25 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 4. **Log directory** — Set a directory path in the "Log Directory" section.
    Use the **Browse** button or type a path directly.  Log files are
-   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.
+   automatically named `YYYY-MM-dd_HHmmss_<portName>.log`.  Left empty,
+   captures go to the `logs` folder in the plugin's configuration directory,
+   which the empty field shows.  Either way they are kept: the plugin never
+   removes a file in the log directory.  Only when LogSquirl gives the
+   plugin no configuration directory are captures temporary files, removed
+   when LogSquirl quits.
 
-5. **Multiple ports** — Select another port, click Start again.
+5. **Control characters** — Lines end at `\n`, `\r\n` or a lone `\r`. Every
+   other control character but tab (NUL padding, the ESC of a colour code,
+   those in the garbage of a wrong baud rate) is written as a visible `\xNN` escape with
+   two upper-case hex digits, e.g. `\x00` or `\x1B`, so the log file stays
+   text and LogSquirl keeps decoding it as UTF-8.  Other bytes, a backslash
+   among them, are written as they came.  A line that never ends is written
+   out every 64 KiB, never in the middle of a UTF-8 character.
+
+6. **Multiple ports** — Select another port, click Start again.
    Each port gets its own tab and session entry.
 
-6. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
+7. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
    Configure.  Set the default baud rate for new sessions (any rate from
    300 to 4000000; one missing from the list is added to it).
 

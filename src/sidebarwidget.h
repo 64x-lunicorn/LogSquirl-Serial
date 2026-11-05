@@ -45,6 +45,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QStringList>
 #include <QTimer>
 #include <QWidget>
 
@@ -145,10 +146,12 @@ private:
 
     // Log directory
     QLineEdit* logDirEdit_ = nullptr;
+    bool logDirSaveFailed_ = false; ///< The last save of the log directory failed.
     QPushButton* logDirBrowseButton_ = nullptr;
 
     // Sessions
     QListWidget* sessionList_ = nullptr;
+    QStringList shownSessions_; ///< The ports sessionList_ shows.
     QLabel* statusLabel_ = nullptr;
 
     // Periodic refresh

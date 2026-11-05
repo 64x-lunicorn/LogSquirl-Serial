@@ -320,8 +320,10 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
         return false;
     }
 
-    // Two sessions appending to one file would interleave their lines.
-    if ( !savePath.isEmpty() && isFileInUse( savePath ) ) {
+    // Two sessions appending to one file would interleave their lines.  A
+    // path that is not a full one is left to SerialProcess::start() to refuse.
+    const auto absoluteSavePath = SerialProcess::absoluteUserPath( savePath );
+    if ( !absoluteSavePath.isEmpty() && isFileInUse( absoluteSavePath ) ) {
         const auto message = QString( "Serial capture not started for %1: another session is "
                                       "already writing to %2." )
                                  .arg( name, savePath );
@@ -459,9 +461,10 @@ void PortWidget::startCapture()
     }
 
     // Determine save path (empty string disables saving)
-    const auto savePath = ( saveCheckBox_->isChecked() && !savePathEdit_->text().isEmpty() )
-                              ? savePathEdit_->text()
-                              : QString();
+    const auto savePath
+        = ( saveCheckBox_->isChecked() && !savePathEdit_->text().trimmed().isEmpty() )
+              ? savePathEdit_->text()
+              : QString();
 
     startSession( buildConfig(), savePath );
 }
