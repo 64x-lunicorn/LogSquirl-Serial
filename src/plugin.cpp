@@ -25,6 +25,8 @@
  * plugin must provide:
  *
  *   - logsquirl_plugin_get_info()   → static metadata
+ *   - logsquirl_plugin_init_ex()    → init() for LogSquirl 26.11 and later,
+ *                                     with the size of the host's table
  *   - logsquirl_plugin_init()       → store host API, register menu action
  *   - logsquirl_plugin_shutdown()   → tear down sessions, destroy dialog
  *   - logsquirl_plugin_configure()  → open default settings dialog
@@ -32,7 +34,9 @@
  * PLUGIN LIFECYCLE
  * ────────────────
  *   1. Host calls get_info() to read metadata.
- *   2. Host calls init(api, handle) — we store the pointers, register
+ *   2. Host calls init_ex(api, handle, api_size) — or init(api, handle),
+ *      which is init_ex() with the base table's size, if it is older than
+ *      LogSquirl 26.11 — we store the pointers and the size, register
  *      a menu action that opens the serial monitor dialog, create the
  *      PortWidget and a SidebarWidget over it, and register the latter as a
  *      sidebar tab.
@@ -232,17 +236,22 @@ LOGSQUIRL_PLUGIN_EXPORT const LogSquirlPluginInfo* logsquirl_plugin_get_info( vo
  *
  * @param api     Host API function table — valid until shutdown().
  * @param handle  Opaque handle — pass back to every host API call.
+ * @param api_size  The size of the table @p api points to, in the host's
+ *                  build: it tells which later functions the host has.
  * @return 0 on success, non-zero on failure.
  *
  * Stores the host API and handle, registers a menu action that opens the
  * serial monitor dialog, and a sidebar tab.  A failure is logged and undone
  * (shutdown()), and init returns 1.
  */
-LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle )
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
+                                                      size_t api_size )
 {
     if ( !api || !handle ) {
         return 1;
     }
+
+    serial_monitor::g_state.hostApiSize = api_size;
 
     serial_monitor::g_state.api = api;
     serial_monitor::g_state.handle = handle;
@@ -293,6 +302,16 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 }
 
 /**
+ * Initialise the plugin for a host older than init_ex(): its table ends
+ * where the functions LogSquirl 26.11 added begin.  The host refuses a
+ * plugin without this entry point.
+ */
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle )
+{
+    return logsquirl_plugin_init_ex( api, handle, LOGSQUIRL_HOST_API_BASE_SIZE );
+}
+
+/**
  * Shut down the plugin — stop all sessions and release resources.
  *
  * The host calls this before unloading the shared library.  After this
@@ -339,6 +358,7 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 
     serial_monitor::g_state.api = nullptr;
     serial_monitor::g_state.handle = nullptr;
+    serial_monitor::g_state.hostApiSize = 0;
     serial_monitor::g_state.initialised = false;
 }
 
