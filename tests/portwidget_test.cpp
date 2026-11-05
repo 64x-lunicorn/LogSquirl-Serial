@@ -90,7 +90,56 @@ SCENARIO( "a session is only accepted when its port opens", "[portwidget]" )
         }
     }
 
+    GIVEN( "a save path that is not a full path" )
+    {
+        FakeHost host;
+        PortWidget widget;
+        const QString port = "logsquirl-test-no-such-port";
+
+        WHEN( "starting a session with it" )
+        {
+            const auto started = widget.startSession( configFor( port ), "relative-capture.log" );
+
+            THEN( "the session is rejected before anything is written, and the user told why" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "not a full path" ) );
+            }
+        }
+    }
+
 #ifdef Q_OS_UNIX
+    GIVEN( "a device and a save path in the home directory, spelled with ~" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        QTemporaryDir home;
+        const auto oldHome = qgetenv( "HOME" );
+        qputenv( "HOME", QFile::encodeName( home.path() ) );
+
+        WHEN( "starting a session" )
+        {
+            const auto started
+                = widget.startSession( configFor( device.devicePath() ), "~/serial/capture.log" );
+            qputenv( "HOME", oldHome );
+            widget.stopAll();
+
+            THEN( "the capture goes to the home directory, and the tab opens its full path" )
+            {
+                const auto expected = QDir( home.path() ).filePath( "serial/capture.log" );
+                REQUIRE( started );
+                REQUIRE( QFileInfo::exists( expected ) );
+                REQUIRE( host.openedFiles == QStringList{ expected } );
+            }
+        }
+
+        qputenv( "HOME", oldHome );
+    }
+
     GIVEN( "a device on a working port" )
     {
         FakeHost host;

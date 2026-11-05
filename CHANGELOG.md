@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for another reason, the session stops and says once which file could not
   be written, instead of showing a running capture while every line is
   lost (#32).
+- **A save path or log directory is a full path.** A leading `~` is your
+  home directory; a relative path is refused with a message instead of
+  being created in LogSquirl's working directory (`/` when it was started
+  from the Finder or the Dock), so the tab always opens the file the
+  capture writes (#35).
 
 ## [0.6.0] — 2026-09-30
 

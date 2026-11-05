@@ -36,7 +36,9 @@
 #include "readonlydir.h"
 #include "serialprocess.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 #include <QTemporaryDir>
 
@@ -582,3 +584,46 @@ SCENARIO( "a log file that cannot be written stops the session and says why", "[
     }
 }
 #endif
+
+SCENARIO( "a typed path is made absolute, and a relative one refused", "[serialprocess]" )
+{
+    THEN( "~ is the home directory, and the path is cleaned" )
+    {
+        REQUIRE( SerialProcess::absoluteUserPath( "~" ) == QDir::homePath() );
+        REQUIRE( SerialProcess::absoluteUserPath( " ~/serial/x.log " )
+                 == QDir::homePath() + "/serial/x.log" );
+        const auto root = QDir::rootPath();
+        REQUIRE( SerialProcess::absoluteUserPath( root + "a/../b/c.log" ) == root + "b/c.log" );
+    }
+
+    THEN( "a relative path, or none, is empty" )
+    {
+        REQUIRE( SerialProcess::absoluteUserPath( "out.log" ).isEmpty() );
+        REQUIRE( SerialProcess::absoluteUserPath( "serial/out.log" ).isEmpty() );
+        REQUIRE( SerialProcess::absoluteUserPath( "~user/x.log" ).isEmpty() );
+        REQUIRE( SerialProcess::absoluteUserPath( "  " ).isEmpty() );
+    }
+
+    GIVEN( "a session with a relative save path" )
+    {
+        FakeHost host;
+        SerialProcess proc( configFor( kMissingPort ), "relative-capture.log" );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+
+        WHEN( "it is started" )
+        {
+            const auto started = proc.start();
+
+            THEN( "it does not start, says why, and creates nothing in the working directory" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "not a full path" ) );
+                REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
+                REQUIRE( proc.tempFilePath().isEmpty() );
+            }
+        }
+    }
+}

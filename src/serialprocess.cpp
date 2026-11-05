@@ -182,6 +182,22 @@ SerialConfig SerialProcess::defaultConfig()
     return cfg;
 }
 
+QString SerialProcess::absoluteUserPath( const QString& path )
+{
+    auto expanded = path.trimmed();
+    if ( expanded == QStringLiteral( "~" ) ) {
+        expanded = QDir::homePath();
+    }
+    else if ( expanded.startsWith( QStringLiteral( "~/" ) )
+              || expanded.startsWith( QStringLiteral( "~\\" ) ) ) {
+        expanded = QDir::homePath() + expanded.mid( 1 );
+    }
+    if ( expanded.isEmpty() || QDir::isRelativePath( expanded ) ) {
+        return {};
+    }
+    return QDir::cleanPath( expanded );
+}
+
 QString SerialProcess::generateLogPath( const QString& dir, const QString& portName,
                                         const QDateTime& timestamp )
 {
@@ -203,6 +219,15 @@ bool SerialProcess::start()
         return true;
     }
 
+    // The path the user typed is checked first: it is theirs to fix,
+    // whatever else would fail.
+    if ( !savePath_.isEmpty() && absoluteUserPath( savePath_ ).isEmpty() ) {
+        Q_EMIT errorOccurred(
+            QString( "The log file %1 is not a full path; give one such as %2." )
+                .arg( savePath_, QDir( QDir::homePath() ).filePath( "serial.log" ) ) );
+        return false;
+    }
+
     // When a save path is configured, write directly to the log directory
     // instead of creating a temporary file.  This avoids accumulating
     // orphaned temp files and ensures the user's log directory is used.
@@ -213,8 +238,8 @@ bool SerialProcess::start()
     QString path;
     QIODevice::OpenMode mode = QIODevice::WriteOnly;
     if ( !savePath_.isEmpty() ) {
-        QDir().mkpath( QFileInfo( savePath_ ).absolutePath() );
-        path = savePath_;
+        path = absoluteUserPath( savePath_ );
+        QDir().mkpath( QFileInfo( path ).absolutePath() );
         mode |= QIODevice::Append;
     }
     else {
@@ -344,7 +369,8 @@ QString SerialProcess::rotateLog()
     // truncate an earlier capture.
     QString newPath;
     if ( usingSavePath_ ) {
-        newPath = generateLogPath( QFileInfo( savePath_ ).absolutePath(), config_.portName );
+        newPath = generateLogPath( QFileInfo( absoluteUserPath( savePath_ ) ).absolutePath(),
+                                   config_.portName );
     }
     else {
         newPath = tempDir_.filePath( QString( "serial_%1_%2.log" )

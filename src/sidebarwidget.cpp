@@ -463,8 +463,13 @@ QString SidebarWidget::generateSavePath( const QString& portName ) const
         dir = cfgDir + "/logs";
     }
 
-    // Ensure the directory exists
-    QDir().mkpath( dir );
+    // Ensure the directory exists.  A relative one is left as it is:
+    // SerialProcess::start() refuses it with a message, rather than create
+    // it in LogSquirl's working directory.
+    if ( const auto absolute = SerialProcess::absoluteUserPath( dir ); !absolute.isEmpty() ) {
+        dir = absolute;
+        QDir().mkpath( dir );
+    }
 
     // Format: YYYY-MM-dd_HHmmss_<port>.log
     return SerialProcess::generateLogPath( dir, portName );

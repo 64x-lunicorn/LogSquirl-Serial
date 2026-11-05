@@ -191,6 +191,15 @@ public:
      */
     static QString configDir();
 
+    /**
+     * The path a user typed, made absolute: a leading `~` is the home
+     * directory, and the path is cleaned.  Empty for a path that is still
+     * relative, as `open_file()` takes absolute paths only and LogSquirl's
+     * working directory is nothing the user chose (`/` when started from
+     * the Finder or the Dock).
+     */
+    static QString absoluteUserPath( const QString& path );
+
     // ── Instance methods ─────────────────────────────────────────────
 
     /**
@@ -198,7 +207,8 @@ public:
      * already running.
      *
      * A save path is appended to, so an earlier capture in that file is
-     * never overwritten.
+     * never overwritten.  One that is not a full path (absoluteUserPath())
+     * is refused before anything is written.
      *
      * On failure the reason has been emitted through errorOccurred(), and
      * a log file that start() created is removed again.
