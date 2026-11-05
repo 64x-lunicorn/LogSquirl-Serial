@@ -246,6 +246,20 @@ SCENARIO( "a log directory that cannot be saved is reported", "[sidebarwidget]" 
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.front().contains( "could not be saved" ) );
             }
+
+            AND_WHEN( "the user edits it again" )
+            {
+                {
+                    const serial_test::ReadOnlyDir readOnly( host.configDir() );
+                    logDir->setText( QDir::tempPath() );
+                    Q_EMIT logDir->editingFinished();
+                }
+
+                THEN( "the user is not told again" )
+                {
+                    REQUIRE( host.notifications.size() == 1 );
+                }
+            }
         }
     }
 }

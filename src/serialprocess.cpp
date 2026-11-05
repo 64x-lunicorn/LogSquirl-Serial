@@ -398,8 +398,11 @@ bool SerialProcess::sendData( const QByteArray& data )
 
     const auto written = port_.write( payload );
     if ( written < 0 ) {
-        Q_EMIT errorOccurred(
-            QString( "Failed to write to %1: %2" ).arg( config_.portName, port_.errorString() ) );
+        // A port error from within write() has said why and ended the session.
+        if ( !portFailed_ ) {
+            Q_EMIT errorOccurred( QString( "Failed to write to %1: %2" )
+                                      .arg( config_.portName, port_.errorString() ) );
+        }
         return false;
     }
 

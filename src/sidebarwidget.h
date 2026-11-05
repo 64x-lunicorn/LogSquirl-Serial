@@ -146,6 +146,7 @@ private:
 
     // Log directory
     QLineEdit* logDirEdit_ = nullptr;
+    bool logDirSaveFailed_ = false; ///< The last save of the log directory failed.
     QPushButton* logDirBrowseButton_ = nullptr;
 
     // Sessions
