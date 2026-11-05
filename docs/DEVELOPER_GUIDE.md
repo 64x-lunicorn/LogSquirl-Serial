@@ -235,6 +235,10 @@ cmake --build build
 cd build && ctest --output-on-failure
 ```
 
+CI also runs the tests in Debug on Linux x64 under AddressSanitizer and
+UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
+`.github/plugin-ci.json`); a sanitizer report fails the build.
+
 ### Test Categories
 
 | Tag | Description |
