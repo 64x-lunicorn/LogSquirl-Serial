@@ -237,7 +237,8 @@ public:
      *
      * Appends the configured line ending (txLineEnding) to the data before
      * transmission.  The sent command is also written to the log file with
-     * a [TX] marker so it appears in the LogSquirl tab.
+     * a [TX] marker so it appears in the LogSquirl tab, after the part of a
+     * line received so far, which is written as a line of its own.
      *
      * @param data  Raw bytes to send (line ending is appended automatically).
      * @return true if the data was written successfully, false otherwise.

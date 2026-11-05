@@ -312,6 +312,29 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         }
     }
 
+    GIVEN( "a device that has sent part of a line" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "foo" ) );
+        serial_test::processEventsFor( 500 ); // let the session read it
+
+        WHEN( "a command is sent, and the device then ends its line" )
+        {
+            REQUIRE( proc.sendData( "cmd" ) );
+            REQUIRE( device.send( "bar\n" ) );
+
+            THEN( "the part received before the command stays before it in the log" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 3; } ) );
+                REQUIRE( readFile( proc.tempFilePath() ) == "foo\n[TX] cmd\nbar\n" );
+            }
+        }
+    }
+
     GIVEN( "a device that ends its lines with a lone CR" )
     {
         FakeHost host;

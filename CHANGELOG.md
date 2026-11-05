@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   take the whole file for UTF-16 or another encoding. A line forced out
   after 64 KiB without a line end no longer cuts a UTF-8 character in two
   (#38).
+- **A sent command no longer splits a received line.** When the device had
+  sent part of a line, the `[TX]` line was written before it and the two
+  parts joined below, under a later timestamp. The part received so far is
+  now written first, as a line of its own (#39).
 
 ## [0.6.0] — 2026-09-30
 

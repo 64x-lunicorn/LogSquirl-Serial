@@ -399,7 +399,11 @@ bool SerialProcess::sendData( const QByteArray& data )
         return false;
     }
 
-    // Log the sent data as a [TX] line in the output file
+    // Log the sent data as a [TX] line in the output file.  The part of a
+    // line received so far is written first, as a line of its own: the
+    // rest of it, arriving after the command, would otherwise be joined to
+    // it below the [TX] line, under a later timestamp.
+    flushPartialLine();
     if ( writeLine( "[TX] " + data ) ) {
         flushLogFile();
     }
