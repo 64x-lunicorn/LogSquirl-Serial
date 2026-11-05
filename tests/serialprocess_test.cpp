@@ -319,8 +319,10 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
 
         SerialProcess proc( configFor( device.devicePath() ) );
         REQUIRE( proc.start() );
-        REQUIRE( device.send( "foo" ) );
-        serial_test::processEventsFor( 500 ); // let the session read it
+        // Sent with a complete line, so the session has read the part once
+        // it has written that line.
+        REQUIRE( device.send( "boot\nfoo" ) );
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
 
         WHEN( "a command is sent, and the device then ends its line" )
         {
@@ -329,8 +331,34 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
 
             THEN( "the part received before the command stays before it in the log" )
             {
-                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 3; } ) );
-                REQUIRE( readFile( proc.tempFilePath() ) == "foo\n[TX] cmd\nbar\n" );
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
+                REQUIRE( readFile( proc.tempFilePath() ) == "boot\nfoo\n[TX] cmd\nbar\n" );
+            }
+        }
+    }
+
+    GIVEN( "a device that has sent part of a line, ending inside a character" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "boot\n25 \xC2" ) ); // the first byte of a degree sign
+        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+
+        WHEN( "a command is sent, and the device then ends its line" )
+        {
+            REQUIRE( proc.sendData( "cmd" ) );
+            REQUIRE( device.send( "\xB0"
+                                  "C\n" ) );
+
+            THEN( "the character is kept whole, after the command" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
+                REQUIRE( readFile( proc.tempFilePath() )
+                         == "boot\n25 \n[TX] cmd\n\xC2\xB0"
+                            "C\n" );
             }
         }
     }

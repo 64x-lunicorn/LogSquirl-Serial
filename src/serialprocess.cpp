@@ -409,8 +409,13 @@ bool SerialProcess::sendData( const QByteArray& data )
     // Log the sent data as a [TX] line in the output file.  The part of a
     // line received so far is written first, as a line of its own: the
     // rest of it, arriving after the command, would otherwise be joined to
-    // it below the [TX] line, under a later timestamp.
+    // it below the [TX] line, under a later timestamp.  A character the
+    // device has only begun stays for the rest of the line, kept whole.
+    const auto complete = completeUtf8Length( readBuffer_ );
+    const auto incomplete = readBuffer_.mid( complete );
+    readBuffer_.truncate( complete );
     flushPartialLine();
+    readBuffer_ = incomplete;
     if ( writeLine( "[TX] " + data ) ) {
         flushLogFile();
     }
