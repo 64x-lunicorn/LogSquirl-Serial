@@ -32,11 +32,17 @@
  * PLUGIN LIFECYCLE
  * ────────────────
  *   1. Host calls get_info() to read metadata.
- *   2. Host calls init(api, handle) — we store the pointers and register
- *      a menu action that opens the serial monitor dialog.
+ *   2. Host calls init(api, handle) — we store the pointers, register
+ *      a menu action that opens the serial monitor dialog, create the
+ *      PortWidget and a SidebarWidget over it, and register the latter as a
+ *      sidebar tab.
  *   3. User interacts with the dialog (select port, configure, start, stop).
- *   4. Host calls shutdown() — we stop all sessions, destroy the dialog,
- *      and clear state.
+ *   4. Host calls shutdown() — we unregister + delete the sidebar, stop all
+ *      sessions, destroy the dialog, and clear state.
+ *
+ * No exception may leave an entry point or a host callback: the host is C,
+ * and an exception escaping into it terminates LogSquirl.  Their work runs
+ * through guarded(), which logs the failure instead.
  *
  * @see logsquirl_plugin_api.h for the full host API reference.
  */
@@ -56,6 +62,8 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QWindow>
+
+#include <exception>
 
 // ── Global state ─────────────────────────────────────────────────────────
 
@@ -91,13 +99,41 @@ static const LogSquirlPluginInfo kPluginInfo = {
     /* api_version */ LOGSQUIRL_PLUGIN_API_VERSION,
 };
 
+// ── Internal helpers ─────────────────────────────────────────────────────
+
+/// Log that work for the host failed.
+static void logFailure( const char* what, const char* reason ) noexcept
+{
+    try {
+        serial_monitor::hostLog( LOGSQUIRL_LOG_ERROR,
+                                 QStringLiteral( "Serial Monitor plugin: %1 failed: %2" )
+                                     .arg( what, QString::fromUtf8( reason ) ) );
+    } catch ( ... ) {
+        // Nothing left to report it with.
+    }
+}
+
+/// Run work for the host, logging instead of throwing: the host is C, and
+/// an exception escaping into it would terminate LogSquirl.
+/// Returns false if it threw.
+template <typename Work>
+static bool guarded( const char* what, Work&& work ) noexcept
+{
+    try {
+        work();
+        return true;
+    } catch ( const std::exception& e ) {
+        logFailure( what, e.what() );
+    } catch ( ... ) {
+        logFailure( what, "unknown exception" );
+    }
+    return false;
+}
+
 // ── Menu action callback ─────────────────────────────────────────────────
 
-/**
- * Called when the user clicks "Serial Monitor…" in the Plugins menu.
- * Creates (if needed) and shows the serial monitor dialog.
- */
-static void showSerialDialog( void* /* userData */ )
+/// Create (if needed) and show the serial monitor dialog.
+static void showDialog()
 {
     if ( !serial_monitor::g_state.dialog ) {
         serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
@@ -119,124 +155,16 @@ static void showSerialDialog( void* /* userData */ )
     dialog->activateWindow();
 }
 
-// ── Exported C entry points ──────────────────────────────────────────────
-
-extern "C" {
-
-/**
- * Return static plugin metadata.
- *
- * The host calls this before init() to read the plugin's identity, type,
- * and API version.  The returned pointer is valid for the lifetime of the
- * shared library.
- */
-LOGSQUIRL_PLUGIN_EXPORT const LogSquirlPluginInfo* logsquirl_plugin_get_info( void )
+/// Called when the user clicks "Serial Monitor…" in the Plugins menu.
+static void showSerialDialog( void* /* userData */ )
 {
-    return &kPluginInfo;
+    guarded( "showing the Serial Monitor dialog", [] { showDialog(); } );
 }
 
-/**
- * Initialise the plugin.
- *
- * @param api     Host API function table — valid until shutdown().
- * @param handle  Opaque handle — pass back to every host API call.
- * @return 0 on success, non-zero on failure.
- *
- * Stores the host API and handle, then registers a menu action that
- * opens the serial monitor dialog.
- */
-LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle )
+/// Let the user change the default baud rate and timestamps, save them, and
+/// show them in the open panels.
+static void configureDefaults( QWidget* parent )
 {
-    if ( !api || !handle ) {
-        return 1;
-    }
-
-    serial_monitor::g_state.api = api;
-    serial_monitor::g_state.handle = handle;
-    serial_monitor::g_state.initialised = true;
-    serial_monitor::g_state.quitting = false;
-
-    api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
-
-    // Files of LogSquirl processes that ended without removing them,
-    // e.g. after a crash: no tab can show them any more.
-    serial_monitor::removeStaleTempDirs( serial_monitor::tempRoot() );
-
-    // Add "Serial Monitor…" to the Plugins menu.  When clicked it opens
-    // a non-modal dialog for port selection and session management.
-    api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026", &showSerialDialog,
-                               nullptr );
-
-    // Create the PortWidget early so the sidebar panel can reference it.
-    serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
-
-    // The host shuts the plugin down both when LogSquirl quits (after
-    // aboutToQuit) and when the plugin is disabled or updated at runtime,
-    // with the tabs left open; only in the first case may the temporary
-    // files go.
-    if ( auto* app = QCoreApplication::instance() ) {
-        QObject::connect( app, &QCoreApplication::aboutToQuit, serial_monitor::g_state.dialog,
-                          []() { serial_monitor::g_state.quitting = true; } );
-    }
-
-    // Register a sidebar tab for serial session management
-    serial_monitor::g_state.sidebarWidget
-        = new serial_monitor::SidebarWidget( serial_monitor::g_state.dialog );
-    api->register_sidebar_tab( handle, "Serial",
-                               static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
-
-    api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin ready." );
-    return 0;
-}
-
-/**
- * Shut down the plugin — stop all sessions and release resources.
- *
- * The host calls this before unloading the shared library.  After this
- * function returns, no host API calls may be made.
- */
-LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
-{
-    serial_monitor::hostLog( LOGSQUIRL_LOG_INFO, "Serial Monitor plugin shutting down\u2026" );
-
-    if ( serial_monitor::g_state.sidebarWidget ) {
-        serial_monitor::g_state.api->unregister_sidebar_tab(
-            serial_monitor::g_state.handle,
-            static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
-        delete serial_monitor::g_state.sidebarWidget;
-        serial_monitor::g_state.sidebarWidget = nullptr;
-    }
-
-    if ( serial_monitor::g_state.dialog ) {
-        serial_monitor::g_state.dialog->stopAll();
-        delete serial_monitor::g_state.dialog;
-        serial_monitor::g_state.dialog = nullptr;
-    }
-
-    // The tabs close with LogSquirl: remove the files of every instance of
-    // the plugin in this process, also those of instances before a runtime
-    // disable or update, which only the directory names remember.  Save
-    // paths and the log directory are never touched.
-    if ( serial_monitor::g_state.quitting ) {
-        serial_monitor::removeOwnTempDirs( serial_monitor::tempRoot() );
-    }
-
-    serial_monitor::g_state.api = nullptr;
-    serial_monitor::g_state.handle = nullptr;
-    serial_monitor::g_state.initialised = false;
-}
-
-/**
- * Open a configuration dialog for default serial settings.
- *
- * @param parent_widget  Cast of a QWidget* the plugin can use as dialog parent.
- *
- * Lets the user change the default baud rate and whether lines are
- * timestamped, and applies them to the open Serial Monitor panels.
- */
-LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
-{
-    auto* parent = static_cast<QWidget*>( parent_widget );
     const auto defaults = serial_monitor::SerialProcess::defaultConfig();
 
     QDialog dialog( parent );
@@ -279,6 +207,153 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
     if ( serial_monitor::g_state.sidebarWidget ) {
         serial_monitor::g_state.sidebarWidget->loadDefaults();
     }
+}
+
+// ── Exported C entry points ──────────────────────────────────────────────
+
+extern "C" {
+
+LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void );
+
+/**
+ * Return static plugin metadata.
+ *
+ * The host calls this before init() to read the plugin's identity, type,
+ * and API version.  The returned pointer is valid for the lifetime of the
+ * shared library.
+ */
+LOGSQUIRL_PLUGIN_EXPORT const LogSquirlPluginInfo* logsquirl_plugin_get_info( void )
+{
+    return &kPluginInfo;
+}
+
+/**
+ * Initialise the plugin.
+ *
+ * @param api     Host API function table — valid until shutdown().
+ * @param handle  Opaque handle — pass back to every host API call.
+ * @return 0 on success, non-zero on failure.
+ *
+ * Stores the host API and handle, registers a menu action that opens the
+ * serial monitor dialog, and a sidebar tab.  A failure is logged and undone
+ * (shutdown()), and init returns 1.
+ */
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle )
+{
+    if ( !api || !handle ) {
+        return 1;
+    }
+
+    serial_monitor::g_state.api = api;
+    serial_monitor::g_state.handle = handle;
+    serial_monitor::g_state.initialised = true;
+    serial_monitor::g_state.quitting = false;
+
+    const bool ok = guarded( "initialisation", [ api, handle ] {
+        api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
+
+        // Files of LogSquirl processes that ended without removing them,
+        // e.g. after a crash: no tab can show them any more.
+        serial_monitor::removeStaleTempDirs( serial_monitor::tempRoot() );
+
+        // Add "Serial Monitor…" to the Plugins menu.  When clicked it opens
+        // a non-modal dialog for port selection and session management.
+        api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026", &showSerialDialog,
+                                   nullptr );
+
+        // Create the PortWidget early so the sidebar panel can reference it.
+        serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
+
+        // The host shuts the plugin down both when LogSquirl quits (after
+        // aboutToQuit) and when the plugin is disabled or updated at runtime,
+        // with the tabs left open; only in the first case may the temporary
+        // files go.
+        if ( auto* app = QCoreApplication::instance() ) {
+            QObject::connect( app, &QCoreApplication::aboutToQuit, serial_monitor::g_state.dialog,
+                              []() { serial_monitor::g_state.quitting = true; } );
+        }
+
+        // Register a sidebar tab for serial session management
+        serial_monitor::g_state.sidebarWidget
+            = new serial_monitor::SidebarWidget( serial_monitor::g_state.dialog );
+        api->register_sidebar_tab( handle, "Serial",
+                                   static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
+        serial_monitor::g_state.sidebarTabRegistered = true;
+
+        api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin ready." );
+    } );
+
+    if ( !ok ) {
+        // Undo what was set up, in reverse: shutdown() unregisters the tab
+        // only if the host took it, then deletes the widgets.
+        logsquirl_plugin_shutdown();
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Shut down the plugin — stop all sessions and release resources.
+ *
+ * The host calls this before unloading the shared library.  After this
+ * function returns, no host API calls may be made.
+ */
+LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
+{
+    auto& st = serial_monitor::g_state;
+    // Each step on its own, so that one failing does not skip the others.
+    guarded( "shutdown", [] {
+        serial_monitor::hostLog( LOGSQUIRL_LOG_INFO, "Serial Monitor plugin shutting down\u2026" );
+    } );
+
+    // The host must let go of the tab before its widget is deleted.
+    if ( st.sidebarTabRegistered ) {
+        st.sidebarTabRegistered = false;
+        guarded( "unregistering the sidebar tab", [] {
+            auto& st = serial_monitor::g_state;
+            if ( st.api && st.handle ) {
+                st.api->unregister_sidebar_tab( st.handle, static_cast<void*>( st.sidebarWidget ) );
+            }
+        } );
+    }
+    if ( st.sidebarWidget ) {
+        guarded( "shutdown", [] { delete serial_monitor::g_state.sidebarWidget; } );
+        st.sidebarWidget = nullptr;
+    }
+
+    if ( st.dialog ) {
+        guarded( "stopping the serial sessions",
+                 [] { serial_monitor::g_state.dialog->stopAll(); } );
+        guarded( "shutdown", [] { delete serial_monitor::g_state.dialog; } );
+        st.dialog = nullptr;
+    }
+
+    // The tabs close with LogSquirl: remove the files of every instance of
+    // the plugin in this process, also those of instances before a runtime
+    // disable or update, which only the directory names remember.  Save
+    // paths and the log directory are never touched.
+    if ( st.quitting ) {
+        guarded( "removing temporary files",
+                 [] { serial_monitor::removeOwnTempDirs( serial_monitor::tempRoot() ); } );
+    }
+
+    serial_monitor::g_state.api = nullptr;
+    serial_monitor::g_state.handle = nullptr;
+    serial_monitor::g_state.initialised = false;
+}
+
+/**
+ * Open a configuration dialog for default serial settings.
+ *
+ * @param parent_widget  Cast of a QWidget* the plugin can use as dialog parent.
+ *
+ * Lets the user change the default baud rate and whether lines are
+ * timestamped, and applies them to the open Serial Monitor panels.
+ */
+LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
+{
+    guarded( "configuring",
+             [ parent_widget ] { configureDefaults( static_cast<QWidget*>( parent_widget ) ); } );
 }
 
 } // extern "C"
