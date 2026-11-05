@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The icon matches the other LogSquirl plugins.** The connector is centred
+  and drawn with the same line width as the other plugin icons.
 - **Built against the plugin API of LogSquirl 26.12.** LogSquirl 26.11 and
   later start the plugin through `logsquirl_plugin_init_ex()` and tell it
   which of their functions it may use; LogSquirl 26.10 starts it as before,
