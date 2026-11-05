@@ -69,6 +69,37 @@ QString safeFileName( const QString& portName )
     return name;
 }
 
+/**
+ * The length of the longest start of @p data that does not end inside a
+ * UTF-8 character: all of it, unless its last bytes begin a character
+ * whose remaining bytes are still to come.  Bytes that are not UTF-8 count
+ * as complete.
+ */
+qsizetype completeUtf8Length( const QByteArray& data )
+{
+    const auto size = data.size();
+    // A character is at most four bytes: look at its first byte, at most
+    // three back from the end.
+    for ( qsizetype back = 1; back <= 3 && back <= size; ++back ) {
+        const auto byte = static_cast<unsigned char>( data.at( size - back ) );
+        if ( ( byte & 0xC0 ) == 0x80 ) {
+            continue; // a continuation byte
+        }
+        qsizetype length = 1;
+        if ( ( byte & 0xE0 ) == 0xC0 ) {
+            length = 2;
+        }
+        else if ( ( byte & 0xF0 ) == 0xE0 ) {
+            length = 3;
+        }
+        else if ( ( byte & 0xF8 ) == 0xF0 ) {
+            length = 4;
+        }
+        return length > back ? size - back : size;
+    }
+    return size;
+}
+
 } // namespace
 
 // ── Construction / destruction ──────────────────────────────────────────
@@ -169,10 +200,35 @@ QList<QByteArray> SerialProcess::takeLines( QByteArray& buffer, bool& afterCr,
     buffer.remove( 0, start );
 
     if ( buffer.size() > maxLineLength ) {
-        lines.append( buffer );
-        buffer.clear();
+        // A character cut in two would be garbled at the end of this line
+        // and the start of the next: its first bytes wait for the rest.
+        auto length = completeUtf8Length( buffer );
+        if ( length == 0 ) {
+            length = buffer.size();
+        }
+        lines.append( buffer.left( length ) );
+        buffer.remove( 0, length );
     }
     return lines;
+}
+
+QByteArray SerialProcess::escapeControls( const QByteArray& line )
+{
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    QByteArray escaped;
+    escaped.reserve( line.size() );
+    for ( const char c : line ) {
+        const auto byte = static_cast<unsigned char>( c );
+        if ( byte < 0x20 && c != '\t' ) {
+            escaped.append( "\\x" );
+            escaped.append( kHex[ byte >> 4 ] );
+            escaped.append( kHex[ byte & 0x0F ] );
+        }
+        else {
+            escaped.append( c );
+        }
+    }
+    return escaped;
 }
 
 SerialConfig SerialProcess::defaultConfig()
@@ -442,7 +498,7 @@ bool SerialProcess::writeLine( const QByteArray& line )
         const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
         record = "[" + ts.toUtf8() + "] ";
     }
-    record += line;
+    record += escapeControls( line );
     record += '\n';
     if ( tempFile_.write( record ) != record.size() ) {
         failWrite();

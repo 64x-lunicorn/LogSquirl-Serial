@@ -280,3 +280,106 @@ SCENARIO( "takeLines caps an unterminated line", "[takelines]" )
         }
     }
 }
+
+SCENARIO( "takeLines does not split a UTF-8 character when it caps a line", "[takelines]" )
+{
+    GIVEN( "unterminated data over the maximum that ends in the first byte of a character" )
+    {
+        // "€" is E2 82 AC; the read ended after its first byte.
+        QByteArray buffer = "0123456789\xE2";
+        bool afterCr = false;
+
+        WHEN( "taking lines with a maximum line length of 8" )
+        {
+            const auto lines = SerialProcess::takeLines( buffer, afterCr, 8 );
+
+            THEN( "the line ends before the character, which waits for its other bytes" )
+            {
+                REQUIRE( lines == Lines{ "0123456789" } );
+                REQUIRE( buffer == "\xE2" );
+            }
+
+            AND_WHEN( "the rest of the character arrives with the end of the line" )
+            {
+                buffer.append( "\x82\xAC end\n" );
+                const auto rest = SerialProcess::takeLines( buffer, afterCr, 8 );
+
+                THEN( "the character is whole in the next line" )
+                {
+                    REQUIRE( rest == Lines{ "\xE2\x82\xAC end" } );
+                    REQUIRE( buffer.isEmpty() );
+                }
+            }
+        }
+    }
+
+    GIVEN( "unterminated data over the maximum that ends in the middle of a four-byte character" )
+    {
+        // U+1F600 is F0 9F 98 80.
+        QByteArray buffer = "0123456789\xF0\x9F\x98";
+        bool afterCr = false;
+
+        WHEN( "taking lines with a maximum line length of 8" )
+        {
+            const auto lines = SerialProcess::takeLines( buffer, afterCr, 8 );
+
+            THEN( "the character's bytes stay in the buffer" )
+            {
+                REQUIRE( lines == Lines{ "0123456789" } );
+                REQUIRE( buffer == "\xF0\x9F\x98" );
+            }
+        }
+    }
+
+    GIVEN( "unterminated data over the maximum that ends with a complete character" )
+    {
+        QByteArray buffer = "0123456789\xE2\x82\xAC";
+        bool afterCr = false;
+
+        WHEN( "taking lines with a maximum line length of 8" )
+        {
+            const auto lines = SerialProcess::takeLines( buffer, afterCr, 8 );
+
+            THEN( "all of it is forced out" )
+            {
+                REQUIRE( lines == Lines{ "0123456789\xE2\x82\xAC" } );
+                REQUIRE( buffer.isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "garbage over the maximum that is not UTF-8 at all" )
+    {
+        QByteArray buffer = "\x80\x80\x80\x80\x80\x80\x80\x80\x80";
+        bool afterCr = false;
+
+        WHEN( "taking lines with a maximum line length of 8" )
+        {
+            const auto lines = SerialProcess::takeLines( buffer, afterCr, 8 );
+
+            THEN( "all of it is forced out, so the buffer cannot grow" )
+            {
+                REQUIRE( lines.size() == 1 );
+                REQUIRE( buffer.isEmpty() );
+            }
+        }
+    }
+}
+
+SCENARIO( "escapeControls makes control characters visible", "[takelines]" )
+{
+    THEN( "NUL padding and the other C0 controls become \\xNN, a tab stays" )
+    {
+        REQUIRE( SerialProcess::escapeControls( QByteArray( "\0\0\0boot", 7 ) )
+                 == "\\x00\\x00\\x00boot" );
+        REQUIRE( SerialProcess::escapeControls( "\x1B[32mOK\x1B[0m" ) == "\\x1B[32mOK\\x1B[0m" );
+        REQUIRE( SerialProcess::escapeControls( "a\tb\x01\x1F" ) == "a\tb\\x01\\x1F" );
+    }
+
+    THEN( "text, and bytes of other characters, are left alone" )
+    {
+        REQUIRE( SerialProcess::escapeControls( "plain text \\x00" ) == "plain text \\x00" );
+        REQUIRE( SerialProcess::escapeControls( "\xE2\x82\xAC \xFF\xFE \x7F" )
+                 == "\xE2\x82\xAC \xFF\xFE \x7F" );
+    }
+}

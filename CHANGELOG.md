@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or unknown error rather than as a lost device; the session then kept
   running and showed a new notification on every pass of the event loop.
   Now every such error stops the capture and is shown once (#34).
+- **Binary bytes from the port can no longer change how LogSquirl decodes
+  the log.** NUL padding, colour codes and the other control characters but
+  tab are written as a visible escape such as `\x00` or `\x1B`, two
+  upper-case hex digits, instead of raw, where they could make LogSquirl
+  take the whole file for UTF-16 or another encoding. A line forced out
+  after 64 KiB without a line end no longer cuts a UTF-8 character in two
+  (#38).
 
 ## [0.6.0] — 2026-09-30
 

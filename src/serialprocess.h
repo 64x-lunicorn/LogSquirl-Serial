@@ -149,7 +149,9 @@ public:
      * more data arrives, unless it is longer than @p maxLineLength: then
      * it is returned as a line of its own, so that a stream that never
      * ends its lines (binary data, a progress display) cannot make the
-     * buffer grow without bound.
+     * buffer grow without bound.  Such a line ends before a UTF-8
+     * character whose last bytes have not arrived yet; they stay in the
+     * buffer, so that the character is not cut in two.
      *
      * Extracted as a static helper so unit tests can exercise the line
      * splitting without real hardware.
@@ -163,6 +165,16 @@ public:
      */
     static QList<QByteArray> takeLines( QByteArray& buffer, bool& afterCr,
                                         qsizetype maxLineLength = kMaxLineLength );
+
+    /**
+     * Return @p line with every C0 control character but tab (NUL, ESC,
+     * the bell, …) written as a visible `\xNN` escape, two upper-case hex
+     * digits.  The log file then holds text only, so that NUL padding or
+     * garbage a device sends cannot make LogSquirl take the whole file for
+     * UTF-16 or another encoding.  Other bytes, a backslash among them,
+     * are left as they are.
+     */
+    static QByteArray escapeControls( const QByteArray& line );
 
     /**
      * Return a sensible default configuration (115200 8N1, no FC, timestamps on).
@@ -324,7 +336,8 @@ private Q_SLOTS:
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
-    /// Write one line to the log file, timestamped if configured; false,
+    /// Write one line to the log file, timestamped if configured and with
+    /// its control characters escaped (escapeControls()); false,
     /// after failWrite(), if the log file cannot be written.
     bool writeLine( const QByteArray& line );
 

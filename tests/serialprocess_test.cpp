@@ -291,6 +291,27 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         }
     }
 
+    GIVEN( "a device that boots with NUL padding and baud-mismatch garbage" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+
+        SerialProcess proc( configFor( device.devicePath() ) );
+
+        WHEN( "it sends them before its first line of text" )
+        {
+            REQUIRE( proc.start() );
+            REQUIRE( device.send( QByteArray( "\0\0\0\x02\xF8\x1B\x7F\x80ready\n", 14 ) ) );
+
+            THEN( "the control bytes are written as visible escapes, the text as it came" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+                REQUIRE( readFile( proc.tempFilePath() )
+                         == "\\x00\\x00\\x00\\x02\xF8\\x1B\x7F\x80ready\n" );
+            }
+        }
+    }
+
     GIVEN( "a device that ends its lines with a lone CR" )
     {
         FakeHost host;
