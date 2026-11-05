@@ -30,6 +30,7 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "filesizelimit.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
@@ -317,6 +318,40 @@ SCENARIO( "an unplugged device ends its session", "[portwidget]" )
                 serial_test::processEventsFor( 100 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "disconnected" ) );
+            }
+        }
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log file that cannot be written ends its session", "[portwidget]" )
+{
+    GIVEN( "a running session whose log file may grow by a few bytes only" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        QTemporaryDir logDir;
+        REQUIRE( widget.startSession( configFor( device.devicePath() ),
+                                      logDir.filePath( "capture.log" ) ) );
+        host.notifications.clear();
+        serial_test::FileSizeLimit limit( 8 );
+        REQUIRE( limit.isActive() );
+
+        WHEN( "the device sends more than that" )
+        {
+            REQUIRE( device.send( "first line\nsecond line\n" ) );
+            const bool removed = waitFor(
+                [ &widget, &device ]() { return !widget.isSessionActive( device.devicePath() ); } );
+            serial_test::processEventsFor( 100 );
+            limit.lift();
+
+            THEN( "the session is removed, and the user is told once why" )
+            {
+                REQUIRE( removed );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "Could not write the log file" ) );
             }
         }
     }

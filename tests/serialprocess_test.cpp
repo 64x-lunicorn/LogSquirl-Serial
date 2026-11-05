@@ -30,6 +30,7 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "filesizelimit.h"
 #include "plugin.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
@@ -522,6 +523,60 @@ SCENARIO( "destroying a running session does not call back its owner", "[serialp
             THEN( "no signal is emitted into the (possibly half-destroyed) owner" )
             {
                 REQUIRE( signalCount == 0 );
+            }
+        }
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log file that cannot be written stops the session and says why", "[serialprocess]" )
+{
+    GIVEN( "a running session whose log file may grow by a few bytes only" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        QStringList errors;
+        QObject::connect( &proc, &SerialProcess::errorOccurred,
+                          [ &errors ]( const QString& message ) { errors << message; } );
+        int finishedCount = 0;
+        QObject::connect( &proc, &SerialProcess::finished,
+                          [ &finishedCount ]() { ++finishedCount; } );
+        REQUIRE( proc.start() );
+        serial_test::FileSizeLimit limit( 8 );
+        REQUIRE( limit.isActive() );
+
+        WHEN( "the device sends more than that, line after line" )
+        {
+            REQUIRE( device.send( "first line\nsecond line\nthird line\n" ) );
+            const bool stopped = waitFor( [ &proc ]() { return !proc.isRunning(); } );
+            serial_test::processEventsFor( 100 );
+            limit.lift();
+
+            THEN( "the session stops, and the failure is reported once, naming the file" )
+            {
+                REQUIRE( stopped );
+                REQUIRE( finishedCount == 1 );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "Could not write the log file" ) );
+                REQUIRE( errors.first().contains( savePath ) );
+            }
+        }
+
+        WHEN( "a command is sent" )
+        {
+            REQUIRE( proc.sendData( "reboot with a long command line" ) );
+            const bool stopped = waitFor( [ &proc ]() { return !proc.isRunning(); } );
+            limit.lift();
+
+            THEN( "the session stops, and the failure is reported once" )
+            {
+                REQUIRE( stopped );
+                REQUIRE( errors.size() == 1 );
+                REQUIRE( errors.first().contains( "Could not write the log file" ) );
             }
         }
     }

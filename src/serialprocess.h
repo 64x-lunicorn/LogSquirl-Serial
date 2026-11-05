@@ -313,8 +313,16 @@ private Q_SLOTS:
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
-    /** Write one line to the log file, timestamped if configured. */
-    void writeLine( const QByteArray& line );
+    /// Write one line to the log file, timestamped if configured; false,
+    /// after failWrite(), if the log file cannot be written.
+    bool writeLine( const QByteArray& line );
+
+    /// Flush the log file; false, after failWrite(), if it cannot be written.
+    bool flushLogFile();
+
+    /// The log file cannot be written (disk full, volume gone): say so once
+    /// and stop the session, rather than drop every line from here on.
+    void failWrite();
 
     /** Write out a buffered partial line, e.g. before the file is closed. */
     void flushPartialLine();
@@ -335,6 +343,7 @@ private:
     bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
     bool createdLogFile_ = false; ///< True when start() created the log file.
     bool deviceLost_ = false;     ///< True once the port reported the device gone.
+    bool writeFailed_ = false;    ///< True once a write to the log file failed.
 };
 
 } // namespace serial_monitor

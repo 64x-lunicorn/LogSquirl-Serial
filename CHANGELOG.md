@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin's start, shutdown, Configure or its menu entry is logged instead
   of escaping into LogSquirl; a start that fails is undone, the sidebar tab
   unregistered before its widget goes.
+- **A log file that cannot be written stops the capture.** When the disk is
+  full, the log directory's drive goes away or the file cannot be written
+  for another reason, the session stops and says once which file could not
+  be written, instead of showing a running capture while every line is
+  lost (#32).
 
 ## [0.6.0] — 2026-09-30
 

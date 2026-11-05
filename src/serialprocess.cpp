@@ -239,6 +239,7 @@ bool SerialProcess::start()
     readBuffer_.clear();
     readAfterCr_ = false;
     deviceLost_ = false;
+    writeFailed_ = false;
 
     // Configure the serial port
     port_.setPortName( config_.portName );
@@ -309,8 +310,9 @@ bool SerialProcess::sendData( const QByteArray& data )
     }
 
     // Log the sent data as a [TX] line in the output file
-    writeLine( "[TX] " + data );
-    tempFile_.flush();
+    if ( writeLine( "[TX] " + data ) ) {
+        flushLogFile();
+    }
 
     Q_EMIT dataSent( data );
     return true;
@@ -397,15 +399,48 @@ QString SerialProcess::tempFilePath() const
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
-void SerialProcess::writeLine( const QByteArray& line )
+bool SerialProcess::writeLine( const QByteArray& line )
 {
+    if ( writeFailed_ ) {
+        return false;
+    }
+    QByteArray record;
     if ( config_.timestamps ) {
         const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
-        tempFile_.write( "[" + ts.toUtf8() + "] " );
+        record = "[" + ts.toUtf8() + "] ";
     }
-    tempFile_.write( line );
-    tempFile_.write( "\n", 1 );
+    record += line;
+    record += '\n';
+    if ( tempFile_.write( record ) != record.size() ) {
+        failWrite();
+        return false;
+    }
     ++lineCount_;
+    return true;
+}
+
+bool SerialProcess::flushLogFile()
+{
+    if ( writeFailed_ ) {
+        return false;
+    }
+    if ( !tempFile_.flush() ) {
+        failWrite();
+        return false;
+    }
+    return true;
+}
+
+void SerialProcess::failWrite()
+{
+    if ( writeFailed_ ) {
+        return;
+    }
+    writeFailed_ = true;
+    Q_EMIT errorOccurred( QString( "Could not write the log file %1 (%2); capture stopped." )
+                              .arg( tempFile_.fileName(), tempFile_.errorString() ) );
+    // From the event loop, not from within the slot that is reading the port.
+    QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
 }
 
 void SerialProcess::discardLogFile()
@@ -423,8 +458,9 @@ void SerialProcess::flushPartialLine()
         return;
     }
 
-    writeLine( readBuffer_ );
-    tempFile_.flush();
+    if ( writeLine( readBuffer_ ) ) {
+        flushLogFile();
+    }
     readBuffer_.clear();
 }
 
@@ -436,9 +472,11 @@ void SerialProcess::onReadyRead()
 
     const auto lines = takeLines( readBuffer_, readAfterCr_ );
     for ( const auto& line : lines ) {
-        writeLine( line );
+        if ( !writeLine( line ) ) {
+            return;
+        }
     }
-    tempFile_.flush();
+    flushLogFile();
 }
 
 void SerialProcess::onPortError( QSerialPort::SerialPortError error )
