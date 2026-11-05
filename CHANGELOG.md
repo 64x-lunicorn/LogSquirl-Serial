@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Only a regular file is written to.** A save path that is a FIFO, a
   device or a symbolic link is refused at once with a message, so it can
   no longer freeze LogSquirl waiting for a reader, nor send the capture
-  elsewhere. A log file the plugin creates is readable by you only (#37).
+  elsewhere. On Linux and macOS a log file the plugin creates is readable
+  by you only (#37).
 - **Any error of an open port ends its session, with one notification.**
   Some drivers report a pulled adapter or a failure of their own as a read
   or unknown error rather than as a lost device; the session then kept

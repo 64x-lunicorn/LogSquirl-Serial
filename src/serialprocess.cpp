@@ -47,6 +47,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 
 #ifdef Q_OS_UNIX
@@ -361,8 +362,13 @@ void SerialProcess::stop()
     // Output the device has not taken yet (flow control holding it back, a
     // pulled cable) is dropped: the last close of a tty waits for it to
     // drain, on Linux up to 30 seconds, and this runs on the UI thread.
-    port_.clear( QSerialPort::Output );
-    port_.close();
+    // An error of a port being closed (a pulled adapter fails the clear)
+    // is not reported: the session ends anyway, and its caller says why.
+    {
+        const QSignalBlocker blocker( port_ );
+        port_.clear( QSerialPort::Output );
+        port_.close();
+    }
 
     // Flush any remaining partial line
     flushPartialLine();
@@ -592,6 +598,8 @@ bool SerialProcess::openLogFile( const QString& path, QIODevice::OpenMode mode, 
     logPath_ = path;
     return true;
 #else
+    // Checked before the open, which a rename between the two could race;
+    // Windows has no open that refuses a link or a device by itself.
     const QFileInfo info( path );
     if ( info.isSymLink() || ( info.exists() && !info.isFile() ) ) {
         error = QStringLiteral( "not a regular file" );
