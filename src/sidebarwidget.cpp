@@ -363,14 +363,12 @@ void SidebarWidget::sendCommand()
 
 void SidebarWidget::refreshSessionList()
 {
-    const int currentCount = portWidget_->activeSessionCount();
-    if ( sessionList_->count() != currentCount ) {
+    // A session can end and another start between two refreshes, so the
+    // ports are compared, not their number.
+    if ( portWidget_->activePorts() != shownSessions_ ) {
         rebuildSessionList();
         updateUiState();
-        return;
     }
-
-    // Names don't change — nothing to refresh for existing items
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────
@@ -380,6 +378,7 @@ void SidebarWidget::rebuildSessionList()
     sessionList_->clear();
 
     const auto ports = portWidget_->activePorts();
+    shownSessions_ = ports;
     for ( const auto& portName : ports ) {
         auto* item = new QListWidgetItem();
         sessionList_->addItem( item );

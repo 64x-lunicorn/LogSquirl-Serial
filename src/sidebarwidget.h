@@ -45,6 +45,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QStringList>
 #include <QTimer>
 #include <QWidget>
 
@@ -149,6 +150,7 @@ private:
 
     // Sessions
     QListWidget* sessionList_ = nullptr;
+    QStringList shownSessions_; ///< The ports sessionList_ shows.
     QLabel* statusLabel_ = nullptr;
 
     // Periodic refresh

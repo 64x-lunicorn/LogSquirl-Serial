@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **The icon matches the other LogSquirl plugins.** The connector is centred
-  and drawn with the same line width as the other plugin icons.
+  and drawn with the same line width as the other plugin icons (#44).
 - **Built against the plugin API of LogSquirl 26.12.** LogSquirl 26.11 and
   later start the plugin through `logsquirl_plugin_init_ex()` and tell it
   which of their functions it may use; LogSquirl 26.10 starts it as before,
@@ -64,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saved to temp directory", but captures are saved, and kept, in `logs` in
   the plugin's configuration directory; the field now shows that directory
   (#36).
+- **The sidebar lists the ports that really capture.** When one session
+  ended and another started within the same second, the list kept the
+  ended port, with buttons that did nothing, and left out the new one (#45).
 
 ## [0.6.0] — 2026-09-30
 
