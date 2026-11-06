@@ -198,10 +198,11 @@ static void configureDefaults( QWidget* parent )
 
     auto* maxFileSpin = new QSpinBox( &dialog );
     maxFileSpin->setObjectName( "maxFileMiB" );
-    maxFileSpin->setRange( 0, 1024 * 1024 );
+    maxFileSpin->setRange( 0, 1024 * 1024 ); // up to 1 TiB
     maxFileSpin->setSuffix( " MiB" );
     maxFileSpin->setSpecialValueText( "Never" );
-    maxFileSpin->setValue( static_cast<int>( defaults.maxFileBytes / ( 1024 * 1024 ) ) );
+    maxFileSpin->setValue(
+        static_cast<int>( defaults.maxFileBytes / serial_monitor::kBytesPerMiB ) );
     maxFileSpin->setToolTip( "When a log file reaches this size, the capture goes on in a new "
                              "file, opened in a new tab" );
     layout->addRow( "Start a new log file at:", maxFileSpin );

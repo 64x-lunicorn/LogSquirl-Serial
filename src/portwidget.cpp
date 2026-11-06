@@ -283,12 +283,12 @@ QStringList PortWidget::activePorts() const
 
 void PortWidget::rotateSession( const QString& portName )
 {
-    rotate( portName, SerialProcess::PartialLine::WriteOut,
-            QString( "New session started for %1" ).arg( portName ) );
+    rotateLogOf( portName, SerialProcess::PartialLine::WriteOut,
+                 QString( "New session started for %1" ).arg( portName ) );
 }
 
-void PortWidget::rotate( const QString& portName, SerialProcess::PartialLine partialLine,
-                         const QString& notification )
+void PortWidget::rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
+                              const QString& notification )
 {
     auto* proc = sessions_.value( portName, nullptr );
     if ( !proc || !proc->isRunning() ) {
@@ -547,9 +547,10 @@ void PortWidget::onSizeLimitReached( const QString& portName )
         return;
     }
     // The line being received goes on in the new file, kept whole.
-    rotate( portName, SerialProcess::PartialLine::Keep,
-            QString( "The capture of %1 reached its size limit of %2; it goes on in a new tab." )
-                .arg( portName, QLocale().formattedDataSize( proc->config().maxFileBytes ) ) );
+    rotateLogOf(
+        portName, SerialProcess::PartialLine::Keep,
+        QString( "The capture of %1 reached its size limit of %2; it goes on in a new tab." )
+            .arg( portName, QLocale().formattedDataSize( proc->config().maxFileBytes ) ) );
 }
 
 void PortWidget::onSessionError( const QString& portName, const QString& message )

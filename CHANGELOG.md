@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaches 1 GiB, the capture goes on in a new file, opened in a new tab, and
   a notification says why; a line being received is kept whole for the new
   file. *Start a new log file at* in Configure sets the size, or turns the
-  limit off with *Never*. Files in the log directory are still never removed
+  limit off with *Never*. When the new file cannot be created, the capture
+  stays in the old one and the rotation is tried again once it has grown by
+  the limit once more. Files in the log directory are still never removed
   (#33).
 
 ### Changed

@@ -243,7 +243,7 @@ SerialConfig SerialProcess::defaultConfig()
         cfg.baudRate = settings.value( "serial/defaultBaud", 115200 ).toInt();
         cfg.timestamps = settings.value( "serial/timestamps", true ).toBool();
         const auto maxFileMiB = settings.value( "serial/maxFileMiB", kDefaultMaxFileMiB ).toInt();
-        cfg.maxFileBytes = qint64{ qMax( 0, maxFileMiB ) } * 1024 * 1024;
+        cfg.maxFileBytes = qMax( 0, maxFileMiB ) * kBytesPerMiB;
     }
 
     return cfg;
@@ -329,7 +329,7 @@ bool SerialProcess::start()
     usingSavePath_ = !savePath_.isEmpty();
     // A save path appended to counts with what it holds already.
     fileBytes_ = tempFile_.size();
-    rotationDue_ = false;
+    nextRotationAt_ = config_.maxFileBytes;
 
     lineCount_ = 0;
     readBuffer_.clear();
@@ -497,7 +497,7 @@ QString SerialProcess::rotateLog( PartialLine partialLine )
     ++rotationCount_;
     lineCount_ = 0;
     fileBytes_ = 0;
-    rotationDue_ = false;
+    nextRotationAt_ = config_.maxFileBytes;
 
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
                                      .arg( config_.portName )
@@ -536,16 +536,17 @@ bool SerialProcess::writeLine( const QByteArray& line )
     }
     ++lineCount_;
     fileBytes_ += record.size();
-    // Asked for once: a rotation that fails keeps the capture in this file,
-    // and asking on every line would report that failure on every line.
-    if ( config_.maxFileBytes > 0 && fileBytes_ >= config_.maxFileBytes && !rotationDue_ ) {
-        rotationDue_ = true;
+    // A rotation that fails keeps the capture in this file: it is asked for
+    // again once the file has grown by the limit once more, as asking on
+    // every line would report the failure on every line.
+    if ( config_.maxFileBytes > 0 && fileBytes_ >= nextRotationAt_ ) {
+        nextRotationAt_ = fileBytes_ + config_.maxFileBytes;
         // From the event loop, not from within the slot that is reading the
         // port; and not once the file has been rotated meanwhile.
         QMetaObject::invokeMethod(
             this,
             [ this ]() {
-                if ( rotationDue_ && isRunning() ) {
+                if ( fileBytes_ >= config_.maxFileBytes && isRunning() ) {
                     Q_EMIT sizeLimitReached();
                 }
             },

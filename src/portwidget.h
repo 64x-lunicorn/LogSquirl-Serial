@@ -186,10 +186,12 @@ private:
     /** Update UI state (button enable/disable, status label). */
     void updateUiState();
 
-    /// Rotate @p portName's log, open the new file in a tab and tell the
-    /// user @p notification; a failure is reported by the session.
-    void rotate( const QString& portName, SerialProcess::PartialLine partialLine,
-                 const QString& notification );
+    /**
+     * Rotate @p portName's log, open the new file in a tab and tell the
+     * user @p notification; a failure is reported by the session.
+     */
+    void rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
+                      const QString& notification );
 
     /** Refill the port combo box from ports(), marking active sessions. */
     void updatePortCombo();

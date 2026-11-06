@@ -683,6 +683,52 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
         }
     }
 
+    GIVEN( "a session at the limit whose log directory no longer accepts new files" )
+    {
+        if ( !ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 16;
+        SerialProcess proc( cfg, logDir.filePath( "capture.log" ) );
+        int requests = 0;
+        QObject::connect( &proc, &SerialProcess::sizeLimitReached, [ & ]() {
+            ++requests;
+            const ReadOnlyDir readOnly( logDir.path() );
+            proc.rotateLog( SerialProcess::PartialLine::Keep );
+        } );
+        REQUIRE( proc.start() );
+        REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
+        REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
+
+        WHEN( "the file grows by less than the limit again" )
+        {
+            REQUIRE( device.send( "short\n" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 3; } ) );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "the failed rotation is not retried on every line" )
+            {
+                REQUIRE( requests == 1 );
+            }
+
+            AND_WHEN( "it has grown by the limit since the failed rotation" )
+            {
+                REQUIRE( device.send( "0123456789\n" ) );
+
+                THEN( "a rotation is asked for again" )
+                {
+                    REQUIRE( waitFor( [ &requests ]() { return requests == 2; } ) );
+                }
+            }
+        }
+    }
+
     GIVEN( "a running session without a size limit" )
     {
         FakeHost host;

@@ -70,6 +70,9 @@ enum class TxLineEnding {
     CRLF  ///< Carriage return + line feed (\r\n).
 };
 
+/// Bytes in a MiB, the unit the size limit is set in.
+constexpr qint64 kBytesPerMiB = 1024 * 1024;
+
 /// Size in MiB at which a log file is rotated unless the user chose another.
 constexpr int kDefaultMaxFileMiB = 1024;
 
@@ -84,7 +87,7 @@ struct SerialConfig {
     TxLineEnding txLineEnding = TxLineEnding::CRLF; ///< Line ending for sent data.
     /// Size at which the log file is rotated (SerialProcess::sizeLimitReached());
     /// 0 for no limit.
-    qint64 maxFileBytes = qint64{ kDefaultMaxFileMiB } * 1024 * 1024;
+    qint64 maxFileBytes = kDefaultMaxFileMiB * kBytesPerMiB;
 };
 
 /**
@@ -346,7 +349,8 @@ Q_SIGNALS:
     /**
      * Emitted, from the event loop, once the log file has reached
      * SerialConfig::maxFileBytes: the receiver rotates it (rotateLog()).
-     * Not emitted again until a rotation has succeeded.
+     * When that fails, emitted again once the file has grown by the limit
+     * once more, not on every line.
      */
     void sizeLimitReached();
 
@@ -404,7 +408,7 @@ private:
     bool portFailed_ = false;     ///< True once the open port reported an error.
     bool writeFailed_ = false;    ///< True once a write to the log file failed.
     qint64 fileBytes_ = 0;        ///< Size of the log file being written.
-    bool rotationDue_ = false;    ///< True once sizeLimitReached() is on its way.
+    qint64 nextRotationAt_ = 0;   ///< Size at which sizeLimitReached() is due.
 };
 
 } // namespace serial_monitor
