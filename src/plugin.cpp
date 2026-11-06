@@ -196,6 +196,17 @@ static void configureDefaults( QWidget* parent )
     timestampCheckBox->setChecked( defaults.timestamps );
     layout->addRow( timestampCheckBox );
 
+    auto* maxFileSpin = new QSpinBox( &dialog );
+    maxFileSpin->setObjectName( "maxFileMiB" );
+    maxFileSpin->setRange( 0, 1024 * 1024 ); // up to 1 TiB
+    maxFileSpin->setSuffix( " MiB" );
+    maxFileSpin->setSpecialValueText( "Never" );
+    maxFileSpin->setValue(
+        static_cast<int>( defaults.maxFileBytes / serial_monitor::kBytesPerMiB ) );
+    maxFileSpin->setToolTip( "When a log file reaches this size, the capture goes on in a new "
+                             "file, opened in a new tab" );
+    layout->addRow( "Start a new log file at:", maxFileSpin );
+
     auto* buttons
         = new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog );
     QObject::connect( buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept );
@@ -209,6 +220,7 @@ static void configureDefaults( QWidget* parent )
     QSettings settings( configDir + "/serial.ini", QSettings::IniFormat );
     settings.setValue( "serial/defaultBaud", baudSpin->value() );
     settings.setValue( "serial/timestamps", timestampCheckBox->isChecked() );
+    settings.setValue( "serial/maxFileMiB", maxFileSpin->value() );
     settings.sync();
     if ( settings.status() != QSettings::NoError ) {
         const auto message = QString( "The Serial Monitor defaults could not be saved to %1." )

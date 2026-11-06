@@ -179,9 +179,19 @@ private Q_SLOTS:
     /** Handle a session error. */
     void onSessionError( const QString& portName, const QString& message );
 
+    /** Rotate a session whose log file reached its size limit. */
+    void onSizeLimitReached( const QString& portName );
+
 private:
     /** Update UI state (button enable/disable, status label). */
     void updateUiState();
+
+    /**
+     * Rotate @p portName's log, open the new file in a tab and tell the
+     * user @p notification; a failure is reported by the session.
+     */
+    void rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
+                      const QString& notification );
 
     /** Refill the port combo box from ports(), marking active sessions. */
     void updatePortCombo();

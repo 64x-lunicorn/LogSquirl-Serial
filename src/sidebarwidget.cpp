@@ -445,6 +445,7 @@ SerialConfig SidebarWidget::buildConfig() const
         = static_cast<QSerialPort::FlowControl>( flowControlCombo_->currentData().toInt() );
     config.timestamps = timestampCheckBox_->isChecked();
     config.txLineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
+    config.maxFileBytes = SerialProcess::defaultConfig().maxFileBytes;
     return config;
 }
 

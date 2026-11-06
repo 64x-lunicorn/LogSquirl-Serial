@@ -274,6 +274,49 @@ SCENARIO( "a failed rotation is reported once", "[portwidget]" )
 #endif
 
 #ifdef Q_OS_UNIX
+SCENARIO( "a capture that reaches its size limit goes on in a new tab", "[portwidget]" )
+{
+    GIVEN( "a session whose log file may hold 16 bytes" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        PortWidget widget;
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 16;
+        cfg.timestamps = false; // keep the file content predictable
+        REQUIRE( widget.startSession( cfg ) );
+        const auto firstFile = host.openedFiles.value( 0 );
+        host.notifications.clear();
+
+        WHEN( "the device sends more than that" )
+        {
+            REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
+            const bool rotated = waitFor( [ &host ]() { return host.openedFiles.size() == 2; } );
+
+            THEN( "the capture goes on in a new file, opened in a new tab" )
+            {
+                REQUIRE( rotated );
+                REQUIRE( host.openedFiles.at( 1 ) != firstFile );
+                REQUIRE( widget.isSessionActive( device.devicePath() ) );
+            }
+
+            THEN( "the user is told why, and the old file keeps its lines" )
+            {
+                REQUIRE( rotated );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "size limit" ) );
+                QFile old( firstFile );
+                REQUIRE( old.open( QIODevice::ReadOnly ) );
+                REQUIRE( old.readAll() == "0123456789\nabcdefghij\n" );
+            }
+        }
+
+        widget.stopAll();
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
 SCENARIO( "stopAll keeps temporary log files for their tabs", "[portwidget]" )
 {
     GIVEN( "a session writing to a temporary file" )
