@@ -140,6 +140,11 @@ SCENARIO( "defaultConfig returns sensible defaults", "[serialprocess]" )
         {
             REQUIRE( cfg.timestamps == true );
         }
+
+        THEN( "a log file is rotated at the default size" )
+        {
+            REQUIRE( cfg.maxFileBytes == serial_monitor::kDefaultMaxFileMiB * 1024 * 1024 );
+        }
     }
 }
 
@@ -152,17 +157,33 @@ SCENARIO( "defaultConfig applies the saved defaults", "[serialprocess]" )
             QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
             settings.setValue( "serial/defaultBaud", 9600 );
             settings.setValue( "serial/timestamps", false );
+            settings.setValue( "serial/maxFileMiB", 5 );
         }
 
         WHEN( "reading the default configuration" )
         {
             const auto cfg = SerialProcess::defaultConfig();
 
-            THEN( "the saved baud rate and timestamp setting are used" )
+            THEN( "the saved baud rate, timestamp setting and size limit are used" )
             {
                 REQUIRE( cfg.baudRate == 9600 );
                 REQUIRE_FALSE( cfg.timestamps );
+                REQUIRE( cfg.maxFileBytes == 5 * 1024 * 1024 );
             }
+        }
+    }
+
+    GIVEN( "a size limit turned off" )
+    {
+        FakeHost host;
+        {
+            QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
+            settings.setValue( "serial/maxFileMiB", 0 );
+        }
+
+        THEN( "log files are never rotated by size" )
+        {
+            REQUIRE( SerialProcess::defaultConfig().maxFileBytes == 0 );
         }
     }
 }
@@ -576,6 +597,143 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
                 REQUIRE( errors.size() == 1 );
                 REQUIRE_FALSE( proc.isRunning() );
                 REQUIRE( finishedCount == 1 );
+            }
+        }
+    }
+}
+#endif
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialprocess]" )
+{
+    GIVEN( "a running session whose log file may hold 16 bytes" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 16;
+        SerialProcess proc( cfg );
+        int requests = 0;
+        QObject::connect( &proc, &SerialProcess::sizeLimitReached,
+                          [ &requests ]() { ++requests; } );
+        REQUIRE( proc.start() );
+        const auto oldPath = proc.tempFilePath();
+
+        WHEN( "the file stays below it" )
+        {
+            REQUIRE( device.send( "0123456789\n" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "no rotation is asked for" )
+            {
+                REQUIRE( requests == 0 );
+            }
+        }
+
+        WHEN( "the file reaches it, and the user rotates it before the request is handled" )
+        {
+            REQUIRE( proc.sendData( "a command longer than the limit" ) );
+            REQUIRE_FALSE( proc.rotateLog().isEmpty() );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "no rotation is asked for: the new file is empty" )
+            {
+                REQUIRE( requests == 0 );
+            }
+        }
+
+        WHEN( "the file reaches it, and grows on while nobody rotates it" )
+        {
+            REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
+            REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
+            REQUIRE( device.send( "more\nand more\n" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "a rotation is asked for once" )
+            {
+                REQUIRE( requests == 1 );
+            }
+
+            AND_WHEN( "it is rotated in the middle of a line" )
+            {
+                REQUIRE( device.send( "par" ) );
+                serial_test::processEventsFor( 100 );
+                const auto newPath = proc.rotateLog( SerialProcess::PartialLine::Keep );
+                REQUIRE( device.send( "tial\n" ) );
+                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+
+                THEN( "the line goes whole to the new file" )
+                {
+                    REQUIRE( readFile( newPath ) == "partial\n" );
+                    REQUIRE( readFile( oldPath ) == "0123456789\nabcdefghij\nmore\nand more\n" );
+                }
+
+                AND_WHEN( "the new file reaches it" )
+                {
+                    REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
+
+                    THEN( "a rotation is asked for again" )
+                    {
+                        REQUIRE( waitFor( [ &requests ]() { return requests == 2; } ) );
+                    }
+                }
+            }
+        }
+    }
+
+    GIVEN( "a running session without a size limit" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 0;
+        SerialProcess proc( cfg );
+        int requests = 0;
+        QObject::connect( &proc, &SerialProcess::sizeLimitReached,
+                          [ &requests ]() { ++requests; } );
+        REQUIRE( proc.start() );
+
+        WHEN( "the device sends a lot" )
+        {
+            REQUIRE( device.send( QByteArray( 900, 'x' ) + "\n" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
+            serial_test::processEventsFor( 100 );
+
+            THEN( "no rotation is asked for" )
+            {
+                REQUIRE( requests == 0 );
+            }
+        }
+    }
+
+    GIVEN( "a save path that already holds more than the limit" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        {
+            QFile earlier( savePath );
+            REQUIRE( earlier.open( QIODevice::WriteOnly ) );
+            earlier.write( QByteArray( 64, 'x' ) + "\n" );
+        }
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 16;
+        SerialProcess proc( cfg, savePath );
+        int requests = 0;
+        QObject::connect( &proc, &SerialProcess::sizeLimitReached,
+                          [ &requests ]() { ++requests; } );
+        REQUIRE( proc.start() );
+
+        WHEN( "the capture appends its first line" )
+        {
+            REQUIRE( device.send( "first\n" ) );
+
+            THEN( "a rotation is asked for" )
+            {
+                REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
             }
         }
     }

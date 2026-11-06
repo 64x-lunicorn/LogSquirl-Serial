@@ -242,6 +242,8 @@ SerialConfig SerialProcess::defaultConfig()
         QSettings settings( cfgDir + "/serial.ini", QSettings::IniFormat );
         cfg.baudRate = settings.value( "serial/defaultBaud", 115200 ).toInt();
         cfg.timestamps = settings.value( "serial/timestamps", true ).toBool();
+        const auto maxFileMiB = settings.value( "serial/maxFileMiB", kDefaultMaxFileMiB ).toInt();
+        cfg.maxFileBytes = qint64{ qMax( 0, maxFileMiB ) } * 1024 * 1024;
     }
 
     return cfg;
@@ -325,6 +327,9 @@ bool SerialProcess::start()
         return false;
     }
     usingSavePath_ = !savePath_.isEmpty();
+    // A save path appended to counts with what it holds already.
+    fileBytes_ = tempFile_.size();
+    rotationDue_ = false;
 
     lineCount_ = 0;
     readBuffer_.clear();
@@ -441,14 +446,15 @@ QString SerialProcess::preserveTempFile()
     return tempDir_.path();
 }
 
-QString SerialProcess::rotateLog()
+QString SerialProcess::rotateLog( PartialLine partialLine )
 {
     if ( !isRunning() ) {
         return {};
     }
 
-    // Flush any pending partial line to the old file before rotating
-    flushPartialLine();
+    if ( partialLine == PartialLine::WriteOut ) {
+        flushPartialLine();
+    }
 
     // Generate the rotated file path.  When using the log directory,
     // create a new timestamped file there; otherwise use the temp dir.
@@ -490,6 +496,8 @@ QString SerialProcess::rotateLog()
 
     ++rotationCount_;
     lineCount_ = 0;
+    fileBytes_ = 0;
+    rotationDue_ = false;
 
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
                                      .arg( config_.portName )
@@ -527,6 +535,22 @@ bool SerialProcess::writeLine( const QByteArray& line )
         return false;
     }
     ++lineCount_;
+    fileBytes_ += record.size();
+    // Asked for once: a rotation that fails keeps the capture in this file,
+    // and asking on every line would report that failure on every line.
+    if ( config_.maxFileBytes > 0 && fileBytes_ >= config_.maxFileBytes && !rotationDue_ ) {
+        rotationDue_ = true;
+        // From the event loop, not from within the slot that is reading the
+        // port; and not once the file has been rotated meanwhile.
+        QMetaObject::invokeMethod(
+            this,
+            [ this ]() {
+                if ( rotationDue_ && isRunning() ) {
+                    Q_EMIT sizeLimitReached();
+                }
+            },
+            Qt::QueuedConnection );
+    }
     return true;
 }
 

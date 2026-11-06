@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A log file is rotated at a size you choose.** When a capture's log file
+  reaches 1 GiB, the capture goes on in a new file, opened in a new tab, and
+  a notification says why; a line being received is kept whole for the new
+  file. *Start a new log file at* in Configure sets the size, or turns the
+  limit off with *Never*. Files in the log directory are still never removed
+  (#33).
+
 ### Changed
 - **The icon matches the other LogSquirl plugins.** The connector is centred
   and drawn with the same line width as the other plugin icons (#44).

@@ -51,6 +51,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QLocale>
 #include <QMessageBox>
 #include <QVBoxLayout>
 
@@ -282,12 +283,19 @@ QStringList PortWidget::activePorts() const
 
 void PortWidget::rotateSession( const QString& portName )
 {
+    rotate( portName, SerialProcess::PartialLine::WriteOut,
+            QString( "New session started for %1" ).arg( portName ) );
+}
+
+void PortWidget::rotate( const QString& portName, SerialProcess::PartialLine partialLine,
+                         const QString& notification )
+{
     auto* proc = sessions_.value( portName, nullptr );
     if ( !proc || !proc->isRunning() ) {
         return;
     }
 
-    const auto newPath = proc->rotateLog();
+    const auto newPath = proc->rotateLog( partialLine );
     if ( newPath.isEmpty() ) {
         // rotateLog() has reported why through errorOccurred()
         return;
@@ -300,7 +308,7 @@ void PortWidget::rotateSession( const QString& portName )
     // Open the new temp file in a follow-mode tab
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, newPath.toUtf8().constData(), 1 );
-        hostNotify( QString( "New session started for %1" ).arg( portName ) );
+        hostNotify( notification );
     }
 }
 
@@ -339,6 +347,9 @@ bool PortWidget::startSession( const SerialConfig& config, const QString& savePa
 
     connect( proc, &SerialProcess::errorOccurred, this,
              [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
+
+    connect( proc, &SerialProcess::sizeLimitReached, this,
+             [ this, name ]() { onSizeLimitReached( name ); } );
 
     if ( !proc->start() ) {
         // start() has reported why through errorOccurred()
@@ -529,6 +540,18 @@ void PortWidget::onSessionFinished( const QString& portName )
     refreshPorts();
 }
 
+void PortWidget::onSizeLimitReached( const QString& portName )
+{
+    const auto* proc = sessions_.value( portName, nullptr );
+    if ( !proc ) {
+        return;
+    }
+    // The line being received goes on in the new file, kept whole.
+    rotate( portName, SerialProcess::PartialLine::Keep,
+            QString( "The capture of %1 reached its size limit of %2; it goes on in a new tab." )
+                .arg( portName, QLocale().formattedDataSize( proc->config().maxFileBytes ) ) );
+}
+
 void PortWidget::onSessionError( const QString& portName, const QString& message )
 {
     hostLog( LOGSQUIRL_LOG_ERROR, portName + ": " + message );
@@ -611,6 +634,7 @@ SerialConfig PortWidget::buildConfig() const
     cfg.flowControl
         = static_cast<QSerialPort::FlowControl>( flowControlCombo_->currentData().toInt() );
     cfg.timestamps = timestampCheckBox_->isChecked();
+    cfg.maxFileBytes = SerialProcess::defaultConfig().maxFileBytes;
     return cfg;
 }
 

@@ -70,6 +70,9 @@ enum class TxLineEnding {
     CRLF  ///< Carriage return + line feed (\r\n).
 };
 
+/// Size in MiB at which a log file is rotated unless the user chose another.
+constexpr int kDefaultMaxFileMiB = 1024;
+
 struct SerialConfig {
     QString portName;
     qint32 baudRate = 115200;
@@ -79,6 +82,9 @@ struct SerialConfig {
     QSerialPort::FlowControl flowControl = QSerialPort::NoFlowControl;
     bool timestamps = true; ///< Prepend [YYYY-MM-DD HH:mm:ss.zzz] to each line.
     TxLineEnding txLineEnding = TxLineEnding::CRLF; ///< Line ending for sent data.
+    /// Size at which the log file is rotated (SerialProcess::sizeLimitReached());
+    /// 0 for no limit.
+    qint64 maxFileBytes = qint64{ kDefaultMaxFileMiB } * 1024 * 1024;
 };
 
 /**
@@ -136,6 +142,12 @@ public:
      */
     static QStringList filterPorts( const QList<QSerialPortInfo>& ports );
 
+    /// What rotateLog() does with the part of a line received so far.
+    enum class PartialLine {
+        WriteOut, ///< End it in the old file, as a line of its own.
+        Keep      ///< Keep it for the new file, where the rest of it goes.
+    };
+
     /// Longest line takeLines() waits for before forcing it out.
     static constexpr qsizetype kMaxLineLength = 64 * 1024;
 
@@ -177,7 +189,9 @@ public:
     static QByteArray escapeControls( const QByteArray& line );
 
     /**
-     * Return a sensible default configuration (115200 8N1, no FC, timestamps on).
+     * Return a sensible default configuration (115200 8N1, no FC, timestamps on,
+     * rotation at kDefaultMaxFileMiB), with the defaults saved through the
+     * Configure dialog applied.
      */
     static SerialConfig defaultConfig();
 
@@ -268,9 +282,10 @@ public:
      * the capture continues in the old file; if that cannot be reopened
      * either, the session is stopped (finished() is emitted).
      *
+     * @param partialLine  Where the part of a line received so far goes.
      * @return Absolute path to the new temp file, or empty on failure.
      */
-    QString rotateLog();
+    QString rotateLog( PartialLine partialLine = PartialLine::WriteOut );
 
     /** Whether the serial port is currently open. */
     bool isRunning() const;
@@ -328,6 +343,13 @@ Q_SIGNALS:
     /** Emitted after data has been sent to the serial port. */
     void dataSent( const QByteArray& data );
 
+    /**
+     * Emitted, from the event loop, once the log file has reached
+     * SerialConfig::maxFileBytes: the receiver rotates it (rotateLog()).
+     * Not emitted again until a rotation has succeeded.
+     */
+    void sizeLimitReached();
+
 private Q_SLOTS:
     /** Handle new data available on the serial port. */
     void onReadyRead();
@@ -381,6 +403,8 @@ private:
     bool createdLogFile_ = false; ///< True when start() created the log file.
     bool portFailed_ = false;     ///< True once the open port reported an error.
     bool writeFailed_ = false;    ///< True once a write to the log file failed.
+    qint64 fileBytes_ = 0;        ///< Size of the log file being written.
+    bool rotationDue_ = false;    ///< True once sizeLimitReached() is on its way.
 };
 
 } // namespace serial_monitor

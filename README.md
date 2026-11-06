@@ -124,7 +124,10 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 7. **Configure defaults** — *Plugins → Manage Plugins…* → select plugin →
    Configure.  Set the default baud rate for new sessions (any rate from
-   300 to 4000000; one missing from the list is added to it).
+   300 to 4000000; one missing from the list is added to it), and the size
+   at which a log file is rotated: when a capture's file reaches it
+   (1 GiB unless you choose another), the capture goes on in a new file,
+   opened in a new tab.  *Never* turns the limit off.
 
 ## Prerequisites
 
