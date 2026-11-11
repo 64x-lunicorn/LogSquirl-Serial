@@ -43,6 +43,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
+#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWidget>
@@ -141,6 +142,49 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
                     = serial_monitor::g_state.dialog->findChild<QCheckBox*>( "timestamps" );
                 REQUIRE( dialogTimestamps );
                 REQUIRE_FALSE( dialogTimestamps->isChecked() );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+}
+
+SCENARIO( "the Configure dialog sets the size at which log files are rotated", "[plugin]" )
+{
+    GIVEN( "an initialised plugin" )
+    {
+        FakeHost host;
+        REQUIRE(
+            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
+            == 0 );
+
+        WHEN( "the user opens Plugins → Configure" )
+        {
+            int shownMiB = -1;
+            QString neverText;
+            QTimer::singleShot( 0, [ &shownMiB, &neverText ]() {
+                auto* dialog = qobject_cast<QDialog*>( QApplication::activeModalWidget() );
+                if ( !dialog ) {
+                    return;
+                }
+                auto* maxSize = dialog->findChild<QSpinBox*>( "maxFileMiB" );
+                if ( !maxSize ) {
+                    dialog->reject();
+                    return;
+                }
+                shownMiB = maxSize->value();
+                neverText = maxSize->specialValueText();
+                maxSize->setValue( 50 );
+                dialog->accept();
+            } );
+            logsquirl_plugin_configure( nullptr );
+
+            THEN( "it shows the default size, offers no limit, and saves the new size" )
+            {
+                REQUIRE( shownMiB == serial_monitor::kDefaultMaxFileMiB );
+                REQUIRE_FALSE( neverText.isEmpty() );
+                QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
+                REQUIRE( settings.value( "serial/maxFileMiB" ).toInt() == 50 );
             }
         }
 
