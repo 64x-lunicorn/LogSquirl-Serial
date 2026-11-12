@@ -26,8 +26,10 @@
  *   │ /dev/ttyUSB0                          │  summary: what the
  *   │ 115200 8N1 · no flow control          │  configuration is
  *   │ ───────────────────────────────────── │  separator, with the details
- *   │ running                               │  details (muted): what it does,
- *   │                                       │  or why it cannot start
+ *   │ running · 12 lines/s · 0:05:31        │  details (muted): what it does,
+ *   │ 1,234 lines · 56.7 KiB received       │  or why it cannot start
+ *   │ [command…            ]      [➤ Send]  │  controls of the running
+ *   │ Line ending: [CRLF ▾]     [↻ Rotate]  │  capture, if any (setControls())
  *   │                               [Edit…] │  Delete only while it is idle
  *   ╰───────────────────────────────────────╯
  *
@@ -41,7 +43,9 @@
  * A plain widget that knows nothing of serial ports: the sidebar
  * (sidebarwidget.h) sets its texts and state and acts on its signals.  It is
  * the tile of LogSquirl-NATS (src/connectiontile.h there), shared by the
- * LogSquirl plugins with saved connections; keep the two alike.
+ * LogSquirl plugins with saved connections; keep the two alike.  It adds
+ * setControls(), a place for controls of the running capture, which the
+ * NATS tile does not need (yet).
  *
  * Its children are named for tests: "state" (its property "state" is
  * stopped, connecting, running or failed), "title", "summary",
@@ -58,6 +62,7 @@
 class QEvent;
 class QLabel;
 class QPushButton;
+class QVBoxLayout;
 
 namespace serial_monitor {
 
@@ -92,6 +97,11 @@ public:
     /// it cannot be deleted (Delete is hidden).
     void setState( TileState state );
 
+    /// Controls of the running capture (a serial port's Rotate and Send),
+    /// shown below the details while it connects or runs.  The tile takes
+    /// @p controls over, and deletes those it was given before.
+    void setControls( QWidget* controls );
+
 protected:
     void changeEvent( QEvent* event ) override;
     bool eventFilter( QObject* watched, QEvent* event ) override;
@@ -122,6 +132,9 @@ private:
     QLabel* details_;
     QPushButton* startStop_;
     QPushButton* delete_;
+    QVBoxLayout* layout_;
+    /// What setControls() gave it, if any.
+    QPointer<QWidget> controls_;
 };
 
 } // namespace serial_monitor

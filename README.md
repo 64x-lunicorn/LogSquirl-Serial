@@ -86,7 +86,7 @@ until then each has a marked placeholder in [Usage](#usage):
 
 | File | Shows |
 |------|-------|
-| `docs/images/sidebar.png` | The Serial sidebar tab: two tiles, one running, one stopped whose port the running one holds |
+| `docs/images/sidebar.png` | The Serial sidebar tab: two tiles, one running with its counters, Send and Rotate, one stopped whose port the running one holds |
 | `docs/images/dialog.png` | The configuration dialog: a configuration loaded, with its port, `115200 8N1`, flow control and log directory |
 
 ## Usage
@@ -138,8 +138,25 @@ until then each has a marked placeholder in [Usage](#usage):
    - **▶ Start** opens the port and captures into a new tab in LogSquirl,
      with live output in follow mode.  The tile turns green, and Delete is
      hidden while it runs.
+   - **While it runs** the tile shows, updated every second, the lines per
+     second and how long it has run, the lines written and the bytes
+     received, the size of the current file, the size at which the next
+     file starts and how many files it has started so far:
+
+     ```
+     running · 12 lines/s · 0:05:31
+     1,234 lines · 56.7 KiB received
+     file 61.2 KiB · new file at 1.0 GiB · 0 rotations
+     ```
+   - **Send** — type a command, choose its line ending (CRLF, LF, CR or
+     none; CRLF unless you choose another) and click **➤ Send** or press
+     Return: it goes to the tile's port and shows in the log as a `[TX]`
+     line.
+   - **↻ Rotate** goes on in a new log file, opened in a new tab; the old
+     tab keeps its file.
    - **■ Stop** stops the capture.  The tab remains open with all captured
-     output preserved.  **■ Stop all** at the top stops every tile.
+     output preserved.  A stopped tile shows its configuration only.
+     **■ Stop all** at the top stops every tile.
    - **Edit…** opens the dialog with the configuration.  A capture that
      runs goes on with the settings it started with until it is stopped
      and started again.
@@ -232,7 +249,7 @@ graph TD
     SW -- "New configuration… / Edit…" --> PD
     SW -- lists, deletes --> PS
     PD -- saves, deletes --> PS
-    SW -- "Start / Stop (owner = name)" --> S
+    SW -- "Start / Stop (owner = name),<br/>Rotate, Send" --> S
     SW --> SB
     S -- manages --> SP1
     S -- manages --> SP2
@@ -252,7 +269,10 @@ also after its port was edited. The views call `Sessions` and update on its
 signals — `sessionStarted`, `sessionStopped`, `sessionChanged` (rotated) and
 `portsChanged` — also when a session ends on its own. A running session's
 counters (lines, bytes received, file size, rotations, size of the next
-rotation, start time) are read from `Sessions::session(port)`.
+rotation, start time) are read from `Sessions::session(port)`: no signal
+announces them, so the sidebar reads them once a second while some capture
+runs, and shows them on its running tile with the lines per second and the
+running time.
 
 ### Data Flow
 
@@ -279,6 +299,17 @@ sequenceDiagram
         SP->>TF: write + flush
         LS->>TF: tail/follow reads
     end
+    loop Every second while it runs
+        SW->>S: session(portOf(name))
+        SW->>SW: show lines, bytes, lines/s, file, running time
+    end
+    User->>SW: Type a command, click ➤ Send
+    SW->>S: sendToSession(portOf(name), text, line ending)
+    S->>SP: sendData(): to the port, and a [TX] line to the file
+    User->>SW: Click ↻ Rotate
+    SW->>S: rotateSession(portOf(name))
+    S-->>LS: open_file(newPath, follow=1): new tab opens
+    S-->>SW: sessionChanged(port)
     User->>SW: Click ■ Stop
     SW->>S: stopSession(portOf(name))
     S->>SP: stop() + preserveTempFile()

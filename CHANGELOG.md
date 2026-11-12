@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notification naming the configuration that holds the port. The sidebar's
   inline form and its list of active sessions are gone, as is the dialog's
   Start / Stop: captures are started from their tiles (#50).
+- **A running tile shows what its capture does, with Send and Rotate.**
+  While it runs, a tile shows, updated every second, the lines per second
+  and how long it has run, the lines written and the bytes received, the
+  size of the current file, the size at which the next file starts and how
+  many files it has started so far. Below them, a command field with its
+  line ending (CRLF, LF, CR or none) and **➤ Send** send a command to the
+  tile's port, and **↻ Rotate** goes on in a new log file and tab: both are
+  back after the sidebar's inline form went. A stopped tile shows its
+  configuration only (#51).
 - **A log file is rotated at a size you choose.** When a capture's log file
   reaches 1 GiB, the capture goes on in a new file, opened in a new tab, and
   a notification says why; a line being received is kept whole for the new

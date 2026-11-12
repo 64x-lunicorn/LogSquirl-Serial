@@ -34,6 +34,7 @@
 #include <QEvent>
 #include <QLabel>
 #include <QPalette>
+#include <QPointer>
 #include <QPushButton>
 
 using serial_monitor::ConnectionTile;
@@ -111,6 +112,58 @@ SCENARIO( "a tile shows by a dot whether its capture runs", "[tile]" )
                 tile.setDetails( {} );
                 REQUIRE_FALSE( child( tile, "details" )->isVisible() );
                 REQUIRE_FALSE( child( tile, "separator" )->isVisible() );
+            }
+        }
+    }
+}
+
+SCENARIO( "a tile shows the controls of its capture only while it runs", "[tile]" )
+{
+    GIVEN( "a stopped tile given controls" )
+    {
+        ConnectionTile tile( "board" );
+        auto* controls = new QWidget;
+        controls->setObjectName( "controls" );
+        tile.setControls( controls );
+        tile.show();
+
+        THEN( "they are the tile's, and hidden" )
+        {
+            REQUIRE( controls->parentWidget() == &tile );
+            REQUIRE_FALSE( controls->isVisible() );
+        }
+
+        WHEN( "it runs" )
+        {
+            tile.setState( TileState::Running );
+
+            THEN( "they are shown" )
+            {
+                REQUIRE( controls->isVisible() );
+            }
+
+            AND_WHEN( "it stops again" )
+            {
+                tile.setState( TileState::Stopped );
+
+                THEN( "they are hidden again" )
+                {
+                    REQUIRE_FALSE( controls->isVisible() );
+                }
+            }
+        }
+
+        WHEN( "it is given other controls" )
+        {
+            QPointer<QWidget> first = controls;
+            auto* second = new QWidget;
+            tile.setControls( second );
+            tile.setState( TileState::Running );
+
+            THEN( "the first are gone, and the second shown" )
+            {
+                REQUIRE( first.isNull() );
+                REQUIRE( second->isVisible() );
             }
         }
     }

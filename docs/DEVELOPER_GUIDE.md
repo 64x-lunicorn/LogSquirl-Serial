@@ -155,6 +155,7 @@ classDiagram
     class SidebarWidget {
         +reload()
         +tile(name) ConnectionTile*
+        +refresh()
         newConfigurationRequested()
         editRequested(name)
     }
@@ -164,6 +165,7 @@ classDiagram
         +setSummary(lines)
         +setDetails(lines)
         +setState(TileState)
+        +setControls(widget)
         startClicked()
         stopClicked()
         editClicked()
@@ -185,11 +187,11 @@ classDiagram
 ```
 
 The sidebar and the dialog hold no session state of their own: they call
-`Sessions` and refresh on its signals, so neither polls, and both stay in step
-when a session ends on its own (device unplugged, log file not writable). A
-view that shows a running session's counters live reads them from
-`Sessions::session(port)` on a timer of its own: they change on every line, so
-no signal announces them.
+`Sessions` and refresh on its signals, and both stay in step when a session
+ends on its own (device unplugged, log file not writable). A running session's
+counters change on every line, so no signal announces them: the sidebar reads
+them from `Sessions::session(port)` on a timer of its own, which runs only
+while some session runs.
 
 ## Key Implementation Details
 
@@ -234,11 +236,39 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   state dot, a title, a summary, details, Start / Stop, Edit… and Delete,
   with a signal for each button. The tab sets its texts and its `TileState`;
   a serial capture is stopped or running (`Connecting` and `Failed` are
-  unused). Keep the two copies alike.
+  unused). Keep the two copies alike. This copy adds `setControls(widget)`:
+  controls of the running capture, which the tile shows below the details
+  while it runs and hides otherwise; it knows nothing of what they do.
 - **Summary**: the port, then the frame and flow control,
   `115200 8N1 · no flow control` (`frameOf()`, `flowControlName()`).
-- **Details**: `running` while its capture runs; while another
-  configuration captures its port, `<port> is in use by "<name>"`.
+- **Details** while its capture runs, from its `SerialProcess` counters:
+
+  ```
+  running · 12 lines/s · 0:05:31                      rate, running time
+  1,234 lines · 56.7 KiB received                     totalLineCount(), receivedBytes()
+  file 61.2 KiB · new file at 1.0 GiB · 0 rotations   fileSize(), nextRotationSize(), rotationCount()
+  ```
+
+  The running time counts from `startTime()`; *no size limit* replaces
+  *new file at* when `nextRotationSize()` is 0. Lines per second are the
+  lines written since the refresh before, divided by the time since then; a
+  start counts from 0. Sizes and numbers are written in the user's locale.
+  A stopped tile shows its main facts only: no details, but
+  `<port> is in use by "<name>"` while another configuration captures its
+  port.
+- **Live**: a `QTimer` calls `refresh()` once a second while
+  `Sessions::activeSessionCount()` is above 0, and stops when the last
+  session ends; a start, stop or rotation (`sessionStarted`,
+  `sessionStopped`, `sessionChanged`) updates the tiles at once, and so does
+  a Send. Tests call `refresh()` instead of waiting for the timer.
+- **Controls** of a running tile (`controlsFor()`): a command field
+  (`command`), the line ending (`lineEnding`: CRLF, LF, CR, none), ➤ Send
+  (`send`; Return in the field too) and ↻ Rotate (`rotate`). Send calls
+  `Sessions::sendToSession(portOf(name), text, lineEnding)` and empties the
+  field once it is sent; a failure is told by `Sessions`' notification and
+  the text stays. Rotate calls `Sessions::rotateSession(portOf(name))`. The
+  line ending chosen is kept by name in the sidebar, so a tile rebuilt by a
+  save keeps it; it is not saved with the configuration.
 - **A tile and its session.** Sessions are keyed by port: a port runs one
   capture at a time. Start passes the configuration's name as the session's
   owner (`Sessions::startSession(config, savePath, owner)`), and the tile
@@ -257,10 +287,6 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   connects to the dialog.
 - Every slot the host's event loop runs goes through `guarded()`
   ([`src/plugin.h`](../src/plugin.h)).
-
-A running tile's counters, Rotate and Send come next (#51): they read
-`Sessions::session(portOf(name))` and call `rotateSession()` and
-`sendToSession()` with that port.
 
 ### Serial Port Discovery
 
@@ -388,14 +414,20 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[filterports]` | Port list filtering logic |
 | `[discoverports]` | Port discovery integration |
 | `[serialprocess]` | SerialProcess construction and defaults |
-| `[counters]` | A session's counters, against a pseudo-terminal |
+| `[counters]` | A session's counters, against a pseudo-terminal, and a running tile showing them |
 | `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
 | `[profiles]` | The saved configurations and their store, against a FakeHost's `serial.ini` |
-| `[tile]` | The tile on its own: states, buttons, colours |
+| `[tile]` | The tile on its own: states, buttons, controls, colours |
 | `[portdialog]` | The dialog: save, edit, delete, what it refuses |
-| `[sidebarwidget]` | The sidebar tab: tiles created, updated, deleted; Start and Stop against pseudo-terminals, two at once, a busy port |
+| `[sidebarwidget]` | The sidebar tab: tiles created, updated, deleted; Start and Stop against pseudo-terminals, two at once, a busy port; a running tile's counters, Rotate and Send |
 | `[plugin]` | The entry points; configurations surviving a restart; the sidebar opening the dialog |
 
 A modal question a click opens (a tile's Delete) is answered from a timer
 started before the click (`tests/modal.h`).
+
+A tile's counters are read by `SidebarWidget::refresh()`, which the tests
+call rather than wait for the sidebar's one-second timer; one test checks
+the timer itself, with a generous timeout. The lines per second are checked
+by sending lines and refreshing until a rate shows, then refreshing until it
+drops to 0, so no test depends on how fast the runner is.

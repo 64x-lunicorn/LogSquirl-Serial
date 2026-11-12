@@ -36,12 +36,19 @@
 #include "sessions.h"
 #include "sidebarwidget.h"
 
+#include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QLabel>
+#include <QLineEdit>
+#include <QLocale>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
+
+#include <algorithm>
 
 using serial_monitor::ConnectionTile;
 using serial_monitor::PortProfile;
@@ -87,10 +94,72 @@ QString stateOf( const ConnectionTile* tile )
     return tile->findChild<QLabel*>( "state" )->property( "state" ).toString();
 }
 
-void click( const ConnectionTile* tile, const char* button )
+QPushButton* button( const ConnectionTile* tile, const char* name )
 {
     REQUIRE( tile );
-    tile->findChild<QPushButton*>( button )->click();
+    auto* found = tile->findChild<QPushButton*>( name );
+    REQUIRE( found );
+    return found;
+}
+
+void click( const ConnectionTile* tile, const char* name )
+{
+    button( tile, name )->click();
+}
+
+/// The controls of the tile's running capture: Rotate and Send.
+QWidget* controls( const ConnectionTile* tile )
+{
+    REQUIRE( tile );
+    auto* found = tile->findChild<QWidget*>( "controls" );
+    REQUIRE( found );
+    return found;
+}
+
+/// The tile's details, one line each.
+QStringList detailLines( const ConnectionTile* tile )
+{
+    return textOf( tile, "details" ).split( '\n' );
+}
+
+/// @p bytes as the tile shows a size.
+QString sizeText( qint64 bytes )
+{
+    return QLocale().formattedDataSize( bytes, 1, QLocale::DataSizeIecFormat );
+}
+
+/// The number before " lines/s" in the tile's details; -1 if there is none.
+qint64 linesPerSecond( const ConnectionTile* tile )
+{
+    const QRegularExpression rate( R"(([^·]+) lines/s)" );
+    const auto match = rate.match( textOf( tile, "details" ) );
+    if ( !match.hasMatch() ) {
+        return -1;
+    }
+    auto digits = match.captured( 1 );
+    digits.remove( QRegularExpression( R"([^\d])" ) );
+    return digits.toLongLong();
+}
+
+/// The running time the tile shows (h:mm:ss at the end of its first
+/// details line), in seconds; -1 if it shows none.
+qint64 runningSeconds( const ConnectionTile* tile )
+{
+    const QRegularExpression time( R"((\d+):(\d\d):(\d\d)$)" );
+    const auto match = time.match( detailLines( tile ).first() );
+    if ( !match.hasMatch() ) {
+        return -1;
+    }
+    return match.captured( 1 ).toLongLong() * 3600 + match.captured( 2 ).toLongLong() * 60
+           + match.captured( 3 ).toLongLong();
+}
+
+/// Whether the sidebar runs a timer.
+bool isPolling( const SidebarWidget& sidebar )
+{
+    const auto timers = sidebar.findChildren<QTimer*>();
+    return std::any_of( timers.begin(), timers.end(),
+                        []( const QTimer* timer ) { return timer->isActive(); } );
 }
 
 } // namespace
@@ -305,9 +374,9 @@ SCENARIO( "a configuration that cannot start says why", "[sidebarwidget]" )
     }
 }
 
-SCENARIO( "the sidebar does not poll the sessions", "[sidebarwidget][signals]" )
+SCENARIO( "the sidebar does not poll while nothing captures", "[sidebarwidget][signals]" )
 {
-    GIVEN( "a sidebar with a tile" )
+    GIVEN( "a sidebar with a stopped tile" )
     {
         FakeHost host;
         Sessions sessions;
@@ -315,9 +384,17 @@ SCENARIO( "the sidebar does not poll the sessions", "[sidebarwidget][signals]" )
         REQUIRE( profiles.store.upsert( profileFor( "board", "/dev/ttyUSB0" ) ).isEmpty() );
         SidebarWidget sidebar( &profiles.store, &sessions );
 
-        THEN( "it runs no timer: it updates on the sessions' signals" )
+        THEN( "no timer runs: it updates on the sessions' signals" )
         {
-            REQUIRE( sidebar.findChildren<QTimer*>().isEmpty() );
+            REQUIRE_FALSE( isPolling( sidebar ) );
+        }
+
+        THEN( "the tile shows its main facts only: no details, no Rotate or Send" )
+        {
+            sidebar.show();
+            const auto* tile = sidebar.tile( "board" );
+            REQUIRE( textOf( tile, "details" ).isEmpty() );
+            REQUIRE_FALSE( controls( tile )->isVisible() );
         }
     }
 }
@@ -356,7 +433,7 @@ SCENARIO( "a tile starts and stops a capture of its port", "[sidebarwidget]" )
                 REQUIRE( stateOf( tile ) == "running" );
                 REQUIRE( tile->findChild<QPushButton*>( "startStop" )->text().contains( "Stop" ) );
                 REQUIRE_FALSE( tile->findChild<QPushButton*>( "delete" )->isVisible() );
-                REQUIRE( textOf( tile, "details" ) == "running" );
+                REQUIRE( textOf( tile, "details" ).startsWith( "running" ) );
             }
 
             THEN( "what the device sends goes to that file" )
@@ -559,6 +636,278 @@ SCENARIO( "a tile follows a capture that ends on its own", "[sidebarwidget][sign
             {
                 REQUIRE( waitFor(
                     [ &sidebar ] { return stateOf( sidebar.tile( "board" ) ) == "stopped"; } ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a running tile shows its session's counters", "[sidebarwidget][counters]" )
+{
+    GIVEN( "a capturing tile" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        Store profiles( host, sessions );
+        QTemporaryDir logDir;
+        REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
+                     .isEmpty() );
+        SidebarWidget sidebar( &profiles.store, &sessions );
+        sidebar.show();
+        QElapsedTimer sinceStart;
+        sinceStart.start();
+        click( sidebar.tile( "board" ), "startStop" );
+        REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+        const auto* tile = sidebar.tile( "board" );
+        const auto limit
+            = sizeText( serial_monitor::kDefaultMaxFileMiB * serial_monitor::kBytesPerMiB );
+
+        THEN( "it shows nothing received yet, the size limit, and how long it runs" )
+        {
+            const auto lines = detailLines( tile );
+            REQUIRE( lines.size() == 3 );
+            REQUIRE( lines.at( 0 ).startsWith( "running · 0 lines/s · " ) );
+            REQUIRE( runningSeconds( tile ) >= 0 );
+            REQUIRE( runningSeconds( tile ) <= sinceStart.elapsed() / 1000 + 1 );
+            REQUIRE( lines.at( 1 ) == "0 lines · " + sizeText( 0 ) + " received" );
+            REQUIRE( lines.at( 2 )
+                     == "file " + sizeText( 0 ) + " · new file at " + limit + " · 0 rotations" );
+        }
+
+        THEN( "it reads the counters on a timer while the capture runs, and no longer after" )
+        {
+            REQUIRE( isPolling( sidebar ) );
+            click( tile, "startStop" ); // Stop
+            REQUIRE_FALSE( isPolling( sidebar ) );
+        }
+
+        WHEN( "the device sends two lines" )
+        {
+            REQUIRE( device.send( "boot ok\nready\n" ) );
+
+            THEN( "the tile's lines, bytes and file size follow, on their own" )
+            {
+                // The timer reads them once a second.
+                REQUIRE( waitFor(
+                    [ tile ] {
+                        return detailLines( tile ).value( 1 )
+                               == "2 lines · " + sizeText( 14 ) + " received";
+                    },
+                    10000 ) );
+                REQUIRE( detailLines( tile ).at( 2 )
+                         == "file " + sizeText( 14 ) + " · new file at " + limit
+                                + " · 0 rotations" );
+            }
+
+            THEN( "a refresh shows them at once" )
+            {
+                REQUIRE( waitFor( [ &sessions, &device ] {
+                    return sessions.session( device.devicePath() )->totalLineCount() == 2;
+                } ) );
+                sidebar.refresh();
+                REQUIRE( detailLines( tile ).at( 1 )
+                         == "2 lines · " + sizeText( 14 ) + " received" );
+            }
+        }
+
+        WHEN( "the device sends steadily" )
+        {
+            // Each refresh counts the lines read since the one before; more
+            // lines are sent until one of them has.
+            const bool shown = waitFor( [ &sidebar, &device, tile ] {
+                device.send( "tick\ntick\ntick\ntick\ntick\n" );
+                sidebar.refresh();
+                return linesPerSecond( tile ) > 0;
+            } );
+
+            THEN( "the tile shows the lines per second" )
+            {
+                REQUIRE( shown );
+            }
+
+            AND_WHEN( "it goes quiet" )
+            {
+                REQUIRE( waitFor( [ &sidebar, tile ] {
+                    sidebar.refresh();
+                    return linesPerSecond( tile ) == 0;
+                } ) );
+
+                THEN( "the rate drops to 0, and the lines stay counted" )
+                {
+                    const auto lines = detailLines( tile ).at( 1 );
+                    REQUIRE_FALSE( lines.startsWith( "0 lines" ) );
+                }
+            }
+        }
+
+        WHEN( "it is stopped" )
+        {
+            click( tile, "startStop" );
+
+            THEN( "it shows its main facts only" )
+            {
+                REQUIRE( textOf( tile, "details" ).isEmpty() );
+                REQUIRE_FALSE( controls( tile )->isVisible() );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a running tile rotates its capture's log", "[sidebarwidget]" )
+{
+    GIVEN( "a capturing tile that has received a line" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        Store profiles( host, sessions );
+        QTemporaryDir logDir;
+        REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
+                     .isEmpty() );
+        SidebarWidget sidebar( &profiles.store, &sessions );
+        sidebar.show();
+        click( sidebar.tile( "board" ), "startStop" );
+        REQUIRE( device.send( "before\n" ) );
+        REQUIRE( waitFor( [ &sessions, &device ] {
+            return sessions.session( device.devicePath() )->totalLineCount() == 1;
+        } ) );
+        const auto* tile = sidebar.tile( "board" );
+
+        THEN( "its Rotate is shown" )
+        {
+            REQUIRE( button( tile, "rotate" )->isVisible() );
+        }
+
+        WHEN( "its Rotate is clicked" )
+        {
+            click( tile, "rotate" );
+
+            THEN( "the capture goes on in a new file, opened in a new tab" )
+            {
+                REQUIRE( host.followedFiles.size() == 2 );
+                REQUIRE( host.followedFiles.at( 0 ) != host.followedFiles.at( 1 ) );
+                REQUIRE( device.send( "after\n" ) );
+                const auto second = host.followedFiles.at( 1 );
+                REQUIRE( waitFor( [ &second ] {
+                    QFile file( second );
+                    return file.open( QIODevice::ReadOnly ) && file.readAll() == "after\n";
+                } ) );
+            }
+
+            THEN( "the tile shows the rotation and the new, empty file at once" )
+            {
+                REQUIRE( detailLines( tile ).at( 1 ) == "1 line · " + sizeText( 7 ) + " received" );
+                REQUIRE(
+                    detailLines( tile ).at( 2 ).startsWith( "file " + sizeText( 0 ) + " · " ) );
+                REQUIRE( detailLines( tile ).at( 2 ).endsWith( " · 1 rotation" ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a running tile sends a command to its port", "[sidebarwidget]" )
+{
+    GIVEN( "a capturing tile" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        Store profiles( host, sessions );
+        QTemporaryDir logDir;
+        REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
+                     .isEmpty() );
+        SidebarWidget sidebar( &profiles.store, &sessions );
+        sidebar.show();
+        click( sidebar.tile( "board" ), "startStop" );
+        REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+        const auto* tile = sidebar.tile( "board" );
+        auto* command = tile->findChild<QLineEdit*>( "command" );
+        auto* lineEnding = tile->findChild<QComboBox*>( "lineEnding" );
+        REQUIRE( command );
+        REQUIRE( lineEnding );
+
+        THEN( "its Send is shown, with CRLF as the line ending" )
+        {
+            REQUIRE( command->isVisible() );
+            REQUIRE( button( tile, "send" )->isVisible() );
+            REQUIRE( lineEnding->currentData().toInt()
+                     == static_cast<int>( serial_monitor::TxLineEnding::CRLF ) );
+        }
+
+        WHEN( "a command is typed, a line ending chosen, and Send clicked" )
+        {
+            using serial_monitor::TxLineEnding;
+            const auto [ ending, bytes ] = GENERATE( table<TxLineEnding, QByteArray>( {
+                { TxLineEnding::CRLF, "\r\n" },
+                { TxLineEnding::LF, "\n" },
+                { TxLineEnding::CR, "\r" },
+                { TxLineEnding::None, "" },
+            } ) );
+            lineEnding->setCurrentIndex( lineEnding->findData( static_cast<int>( ending ) ) );
+            command->setText( "reboot" );
+            click( tile, "send" );
+
+            THEN( "the port gets the command with that line ending, and the field is emptied" )
+            {
+                const QByteArray expected = "reboot" + bytes;
+                QByteArray received;
+                REQUIRE( waitFor( [ &device, &received, &expected ] {
+                    received += device.receive();
+                    return received.size() >= expected.size();
+                } ) );
+                REQUIRE( received == expected );
+                REQUIRE( command->text().isEmpty() );
+            }
+
+            THEN( "the tile counts the sent line" )
+            {
+                REQUIRE( detailLines( tile ).at( 1 ).startsWith( "1 line · " ) );
+            }
+        }
+
+        WHEN( "Return is pressed in the command field" )
+        {
+            command->setText( "status" );
+            Q_EMIT command->returnPressed();
+
+            THEN( "the command is sent" )
+            {
+                QByteArray received;
+                REQUIRE( waitFor( [ &device, &received ] {
+                    received += device.receive();
+                    return received == "status\r\n";
+                } ) );
+            }
+        }
+
+        WHEN( "Send is clicked without a command" )
+        {
+            click( tile, "send" );
+
+            THEN( "nothing is sent" )
+            {
+                REQUIRE( device.receive().isEmpty() );
+                REQUIRE( sessions.session( device.devicePath() )->totalLineCount() == 0 );
+            }
+        }
+
+        WHEN( "a line ending is chosen and another configuration is saved" )
+        {
+            lineEnding->setCurrentIndex(
+                lineEnding->findData( static_cast<int>( serial_monitor::TxLineEnding::LF ) ) );
+            REQUIRE( profiles.store.upsert( profileFor( "console", "/dev/ttyUSB1" ) ).isEmpty() );
+
+            THEN( "the rebuilt tile keeps it" )
+            {
+                const auto* rebuilt = sidebar.tile( "board" );
+                REQUIRE( rebuilt->findChild<QComboBox*>( "lineEnding" )->currentData().toInt()
+                         == static_cast<int>( serial_monitor::TxLineEnding::LF ) );
             }
         }
 

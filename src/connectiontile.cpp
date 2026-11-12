@@ -94,6 +94,7 @@ ConnectionTile::ConnectionTile( const QString& name, QWidget* parent )
     , details_( textLabel( "details", this ) )
     , startStop_( new QPushButton( this ) )
     , delete_( new QPushButton( QStringLiteral( "Delete" ), this ) )
+    , layout_( new QVBoxLayout( this ) )
 {
     setObjectName( "tile" );
 
@@ -134,14 +135,13 @@ ConnectionTile::ConnectionTile( const QString& name, QWidget* parent )
     foot->addWidget( edit );
     foot->addWidget( delete_ );
 
-    auto* layout = new QVBoxLayout( this );
-    layout->setContentsMargins( 12, 10, 12, 10 );
-    layout->setSpacing( 6 );
-    layout->addLayout( head );
-    layout->addWidget( summary_ );
-    layout->addWidget( separator_ );
-    layout->addWidget( details_ );
-    layout->addLayout( foot );
+    layout_->setContentsMargins( 12, 10, 12, 10 );
+    layout_->setSpacing( 6 );
+    layout_->addLayout( head );
+    layout_->addWidget( summary_ );
+    layout_->addWidget( separator_ );
+    layout_->addWidget( details_ );
+    layout_->addLayout( foot );
 
     connect( startStop_, &QPushButton::clicked, this, [ this ] {
         if ( active_ ) {
@@ -182,6 +182,9 @@ void ConnectionTile::setState( TileState state )
                                 ? QStringLiteral( "Stop the capture; its tab keeps the file" )
                                 : QStringLiteral( "Open the port, and capture into a new tab" ) );
     delete_->setVisible( !active_ );
+    if ( controls_ ) {
+        controls_->setVisible( active_ );
+    }
 
     const auto* name = stateName( state );
     state_->setProperty( "state", QString::fromLatin1( name ) );
@@ -189,6 +192,17 @@ void ConnectionTile::setState( TileState state )
     setProperty( "running", active_ );
     repolish( state_ );
     repolish( this );
+}
+
+void ConnectionTile::setControls( QWidget* controls )
+{
+    delete controls_;
+    controls_ = controls;
+    if ( controls_ ) {
+        // Below the details, above Edit… and Delete.
+        layout_->insertWidget( layout_->indexOf( details_ ) + 1, controls_ );
+        controls_->setVisible( active_ );
+    }
 }
 
 void ConnectionTile::changeEvent( QEvent* event )
