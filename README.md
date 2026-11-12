@@ -154,7 +154,8 @@ until then each has a marked placeholder in [Usage](#usage):
    - **Send** — type a command, choose its line ending (CRLF, LF, CR or
      none; CRLF unless you choose another) and click **➤ Send** or press
      Return: it goes to the tile's port and shows in the log as a `[TX]`
-     line.
+     line.  A command typed but not sent yet stays in its field while you
+     save or delete other configurations.
    - **↻ Rotate** goes on in a new log file, opened in a new tab; the old
      tab keeps its file.
    - **■ Stop** stops the capture.  The tab remains open with all captured

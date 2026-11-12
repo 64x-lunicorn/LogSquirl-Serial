@@ -209,6 +209,7 @@ QWidget* SidebarWidget::controlsFor( const QString& name )
     command->setPlaceholderText( QStringLiteral( "Command to send…" ) );
     command->setToolTip( QStringLiteral( "A command for the device on this port" ) );
     command->setClearButtonEnabled( true );
+    command->setText( commandByName_.value( name ) );
     auto* send = new QPushButton( QStringLiteral( "➤ Send" ), controls );
     send->setObjectName( "send" );
     send->setToolTip(
@@ -258,6 +259,17 @@ QWidget* SidebarWidget::controlsFor( const QString& name )
         guarded( "choosing a line ending", [ this, &name, lineEnding ] {
             lineEndingByName_.insert(
                 name, static_cast<TxLineEnding>( lineEnding->currentData().toInt() ) );
+        } );
+    } );
+    // Typed, sent (emptied) or cleared: what a rebuilt tile shows again.
+    connect( command, &QLineEdit::textChanged, this, [ this, name ]( const QString& text ) {
+        guarded( "typing a serial command", [ this, &name, &text ] {
+            if ( text.isEmpty() ) {
+                commandByName_.remove( name );
+            }
+            else {
+                commandByName_.insert( name, text );
+            }
         } );
     } );
     connect( rotateButton, &QPushButton::clicked, this, [ this, name ] {

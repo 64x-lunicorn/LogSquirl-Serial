@@ -274,8 +274,9 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   `Sessions::sendToSession(portOf(name), text, lineEnding)` and empties the
   field once it is sent; a failure is told by `Sessions`' notification and
   the text stays. Rotate calls `Sessions::rotateSession(portOf(name))`. The
-  line ending chosen is kept by name in the sidebar, so a tile rebuilt by a
-  save keeps it; it is not saved with the configuration.
+  line ending chosen and the command typed but not sent yet are kept by name
+  in the sidebar, so a tile rebuilt by a save or delete of another
+  configuration keeps them; neither is saved with the configuration.
 - **A tile and its session.** Sessions are keyed by port: a port runs one
   capture at a time. Start passes the configuration's name as the session's
   owner (`Sessions::startSession(config, savePath, owner)`), and the tile

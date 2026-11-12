@@ -924,6 +924,39 @@ SCENARIO( "a running tile sends a command to its port", "[sidebarwidget]" )
             }
         }
 
+        WHEN( "a command is half typed and another configuration is saved" )
+        {
+            command->setText( "rebo" );
+            REQUIRE( profiles.store.upsert( profileFor( "console", "/dev/ttyUSB1" ) ).isEmpty() );
+
+            THEN( "the rebuilt tile keeps it, and Send sends it" )
+            {
+                auto* rebuiltCommand = sidebar.tile( "board" )->findChild<QLineEdit*>( "command" );
+                REQUIRE( rebuiltCommand->text() == "rebo" );
+                rebuiltCommand->setText( rebuiltCommand->text() + "ot" );
+                click( sidebar.tile( "board" ), "send" );
+                QByteArray received;
+                REQUIRE( waitFor( [ &device, &received ] {
+                    received += device.receive();
+                    return received == "reboot\r\n";
+                } ) );
+            }
+        }
+
+        WHEN( "a command is sent and another configuration is saved" )
+        {
+            command->setText( "status" );
+            click( tile, "send" );
+            REQUIRE( command->text().isEmpty() );
+            REQUIRE( profiles.store.upsert( profileFor( "console", "/dev/ttyUSB1" ) ).isEmpty() );
+
+            THEN( "the rebuilt tile's field is empty: the sent command is not back" )
+            {
+                REQUIRE(
+                    sidebar.tile( "board" )->findChild<QLineEdit*>( "command" )->text().isEmpty() );
+            }
+        }
+
         sessions.stopAll();
     }
 }

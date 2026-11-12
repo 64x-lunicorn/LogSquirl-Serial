@@ -50,7 +50,9 @@
  * current file's size, the size at which the next file starts ("no size
  * limit" without one) and the rotations so far.  Below them are its controls: a command field, the
  * line ending (CRLF, LF, CR or none; CRLF until another is chosen, kept per tile until LogSquirl
- * quits), ➤ Send (or Return) and ↻ Rotate.  Send writes the command to the
+ * quits), ➤ Send (or Return) and ↻ Rotate.  The command typed and not sent
+ * yet is kept per tile too, so a reload() after another configuration was
+ * saved or deleted does not lose it.  Send writes the command to the
  * port the tile's session captures (Sessions::sendToSession()) and empties
  * the field; Rotate goes on in a new file and tab
  * (Sessions::rotateSession()).  A stopped tile shows its main facts only:
@@ -164,6 +166,9 @@ private:
     QHash<QString, QString> savedPortByName_; ///< The port each configuration has saved.
     /// The line ending chosen on each tile, kept when the tiles are rebuilt.
     QHash<QString, TxLineEnding> lineEndingByName_;
+    /// The command typed on each tile and not sent yet, kept when the tiles
+    /// are rebuilt.
+    QHash<QString, QString> commandByName_;
 
     /// What a running capture had written at the last refresh().
     struct Sample {

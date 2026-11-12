@@ -30,8 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   many files it has started so far. Below them, a command field with its
   line ending (CRLF, LF, CR or none) and **➤ Send** send a command to the
   tile's port, and **↻ Rotate** goes on in a new log file and tab: both are
-  back after the sidebar's inline form went. A stopped tile shows its
-  configuration only (#51).
+  back after the sidebar's inline form went. The line ending chosen and a
+  command typed but not sent yet stay while other configurations are saved
+  or deleted. A stopped tile shows its configuration only (#51).
 - **A log file is rotated at a size you choose.** When a capture's log file
   reaches 1 GiB, the capture goes on in a new file, opened in a new tab, and
   a notification says why; a line being received is kept whole for the new
