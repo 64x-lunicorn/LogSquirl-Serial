@@ -88,10 +88,27 @@ Sessions::Sessions( QObject* parent )
 
 // ── Starting and stopping ───────────────────────────────────────────────
 
-bool Sessions::startSession( const SerialConfig& config, const QString& savePath )
+bool Sessions::startSession( const SerialConfig& config, const QString& savePath,
+                             const QString& owner )
 {
     const auto& name = config.portName;
-    if ( name.isEmpty() || sessions_.contains( name ) ) {
+    if ( name.isEmpty() ) {
+        return false;
+    }
+
+    // One session a port: the port would be opened twice.
+    if ( sessions_.contains( name ) ) {
+        const auto holder = owners_.value( name );
+        const auto message
+            = holder.isEmpty()
+                  ? QString( "Serial capture not started for %1: the port is already being "
+                             "captured." )
+                        .arg( name )
+                  : QString( "Serial capture not started for %1: the port is already being "
+                             "captured by “%2”; stop it first." )
+                        .arg( name, holder );
+        hostLog( LOGSQUIRL_LOG_WARNING, message );
+        hostNotify( message );
         return false;
     }
 
@@ -134,6 +151,9 @@ bool Sessions::startSession( const SerialConfig& config, const QString& savePath
     }
 
     sessions_.insert( name, proc );
+    if ( !owner.isEmpty() ) {
+        owners_.insert( name, owner );
+    }
 
     openInTab( proc->tempFilePath() );
     hostNotify(
@@ -238,6 +258,16 @@ const SerialProcess* Sessions::session( const QString& portName ) const
     return sessions_.value( portName, nullptr );
 }
 
+QString Sessions::ownerOf( const QString& portName ) const
+{
+    return owners_.value( portName );
+}
+
+QString Sessions::portOf( const QString& owner ) const
+{
+    return owner.isEmpty() ? QString() : owners_.key( owner );
+}
+
 void Sessions::refreshPorts()
 {
     ports_ = SerialProcess::discoverPorts();
@@ -291,6 +321,7 @@ void Sessions::onSessionError( const QString& portName, const QString& message )
 SerialProcess* Sessions::takeSession( const QString& portName )
 {
     auto* proc = sessions_.take( portName );
+    owners_.remove( portName );
     if ( proc ) {
         // The session is over as far as Sessions is concerned.  Stopping it
         // emits finished(), and onSessionFinished() must not act on that:

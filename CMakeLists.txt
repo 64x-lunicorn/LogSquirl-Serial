@@ -40,7 +40,9 @@ add_library(logsquirl_serial SHARED
     src/serialprocess.cpp
     src/tempdirs.cpp
     src/sessions.cpp
-    src/portwidget.cpp
+    src/profiles.cpp
+    src/portdialog.cpp
+    src/connectiontile.cpp
     src/sidebarwidget.cpp
     src/baudrate.cpp
 )

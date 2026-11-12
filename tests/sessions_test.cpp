@@ -778,4 +778,106 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
         }
     }
 }
+
+SCENARIO( "a session remembers the configuration that started it", "[sessions]" )
+{
+    GIVEN( "a session started by the configuration \"board\"" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
+
+        THEN( "its port knows the configuration, and the configuration its port" )
+        {
+            REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
+            REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+            REQUIRE( sessions.portOf( "other" ).isEmpty() );
+        }
+
+        WHEN( "it is stopped" )
+        {
+            sessions.stopSession( device.devicePath() );
+
+            THEN( "neither is remembered any more" )
+            {
+                REQUIRE( sessions.ownerOf( device.devicePath() ).isEmpty() );
+                REQUIRE( sessions.portOf( "board" ).isEmpty() );
+            }
+        }
+
+        WHEN( "it ends on its own, its device unplugged" )
+        {
+            // As in "an unplugged device ends its session": a pseudo-terminal
+            // cannot be unplugged, so the port reports the error itself.
+            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
+            REQUIRE( session );
+            QMetaObject::invokeMethod(
+                session, "onPortError",
+                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+
+            THEN( "neither is remembered any more" )
+            {
+                REQUIRE(
+                    waitFor( [ &sessions ]() { return sessions.portOf( "board" ).isEmpty(); } ) );
+                REQUIRE( sessions.ownerOf( device.devicePath() ).isEmpty() );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a port that already captures is refused with a message", "[sessions]" )
+{
+    GIVEN( "a port captured for the configuration \"board\"" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        WHEN( "another configuration starts a capture of the same port" )
+        {
+            const auto started
+                = sessions.startSession( configFor( device.devicePath() ), {}, "console" );
+
+            THEN( "it is refused, and the user is told which capture holds the port" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( device.devicePath() ) );
+                REQUIRE( host.notifications.first().contains( "board" ) );
+                REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
+            }
+        }
+
+        sessions.stopAll();
+    }
+
+    GIVEN( "a port captured without a configuration" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
+        host.notifications.clear();
+
+        WHEN( "it is started again" )
+        {
+            REQUIRE_FALSE( sessions.startSession( configFor( device.devicePath() ) ) );
+
+            THEN( "the user is told that the port is already being captured" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "already" ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
 #endif

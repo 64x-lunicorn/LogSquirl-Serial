@@ -19,132 +19,104 @@
 
 /**
  * @file sidebarwidget.h
- * @brief Sidebar panel for serial port session management.
+ * @brief The plugin's tab "Serial" in LogSquirl's sidebar.
  *
- * This widget is registered as a tab in the LogSquirl sidebar via the
- * host API's register_sidebar_tab().  It provides:
+ *   [New configuration…]           [Stop all]
+ *   ┌ tile: board ──────────────────────────┐
+ *   └───────────────────────────────────────┘
+ *   ┌ tile: console ────────────────────────┐
+ *   └───────────────────────────────────────┘
  *
- *   - Port combo box with refresh button
- *   - Serial settings (baud, data bits, stop bits, parity, flow, timestamps)
- *   - Start / Stop capture buttons
- *   - Active sessions list showing port name, line count, and
- *     per-session Rotate / Stop buttons
- *   - A "Stop All" button
+ * One tile (connectiontile.h) per saved configuration (profiles.h), in the
+ * order they were saved, with what the configuration is (its port, its
+ * frame such as `115200 8N1`, its flow control) and a Start / Stop button.
+ * Tiles on different ports run at the same time, one session each
+ * (sessions.h).
  *
- * The panel is a view of the Sessions (sessions.h), as is the dialog
- * still available via the Plugins menu: it calls them, and updates on
- * their signals.
+ * A tile's session is the one Sessions knows it started (Sessions::portOf()
+ * of its name), so a tile shows its capture as running also after its port
+ * was changed in the dialog.  A tile whose port is captured by another
+ * configuration says so in its details ("<port> is in use by …"); its Start
+ * is refused by the sessions with a notification that says the same.
+ *
+ * Edit… opens the dialog with the configuration and New configuration…
+ * opens it empty; the plugin carries those out (editRequested() and
+ * newConfigurationRequested()).  Delete asks, then deletes the saved
+ * configuration through the profile store, not the dialog; when the store
+ * cannot, a message box says why.  The tiles follow the store: reload()
+ * shows the configurations saved now whenever it changed.  They follow the
+ * sessions' signals; nothing is polled.
+ *
+ * Children named for tests: "newConfiguration", "stopAll", "empty" (the
+ * hint shown without configurations), and the tiles ("tile").
+ *
+ * OWNERSHIP
+ * ─────────
+ * Created by logsquirl_plugin_init() and registered with
+ * register_sidebar_tab.  logsquirl_plugin_shutdown() unregisters and
+ * deletes it, before the store and the sessions it shows.
  */
 
 #pragma once
 
-#include "serialprocess.h"
-
-#include <QCheckBox>
-#include <QComboBox>
-#include <QLabel>
-#include <QLineEdit>
-#include <QListWidget>
-#include <QPushButton>
+#include <QHash>
 #include <QWidget>
+
+class QLabel;
+class QPushButton;
+class QVBoxLayout;
 
 namespace serial_monitor {
 
+class ConnectionTile;
+class ProfileStore;
 class Sessions;
 
-/**
- * Sidebar panel widget for serial port session control.
- *
- * Embeds port selection, serial settings, and an active-sessions list.
- * All actual session logic is in the Sessions.
- */
 class SidebarWidget : public QWidget {
     Q_OBJECT
 
 public:
-    /**
-     * Construct the sidebar panel.
-     *
-     * @param sessions  The captures the panel shows and controls.
-     *                  Must outlive this widget.
-     * @param parent    QWidget parent.
-     */
-    explicit SidebarWidget( Sessions* sessions, QWidget* parent = nullptr );
+    /// Shows the configurations of @p profiles and the sessions of
+    /// @p sessions, which must both outlive it.
+    SidebarWidget( ProfileStore* profiles, Sessions* sessions, QWidget* parent = nullptr );
 
-    /** Set the serial settings to the saved defaults (baud rate, timestamps). */
-    void loadDefaults();
+    /// Show the configurations saved now.
+    void reload();
 
-private Q_SLOTS:
-    /** Refill the port combo box and the session list from the Sessions. */
-    void updatePortList();
+    /// The tile of the configuration @p name; nullptr if there is none.
+    ConnectionTile* tile( const QString& name ) const;
 
-    /** Start capture for the currently selected port. */
-    void startCapture();
+Q_SIGNALS:
+    /// New configuration… was clicked.
+    void newConfigurationRequested();
 
-    /** Stop capture for the currently selected port. */
-    void stopSelectedCapture();
-
-    /** Stop all active sessions. */
-    void stopAllCaptures();
-
-    /** Send the contents of the send input to the active session. */
-    void sendCommand();
+    /// Edit… was clicked on the configuration @p name.
+    void editRequested( const QString& name );
 
 private:
-    /** Build or rebuild the sessions list widget contents. */
-    void rebuildSessionList();
+    /// Start a capture of the configuration @p name, as its session's owner.
+    void start( const QString& name );
 
-    /** Return the port name of the current combo selection. */
-    QString currentPortName() const;
+    /// Stop the capture the configuration @p name started.
+    void stop( const QString& name );
 
-    /** Build a SerialConfig from the current sidebar UI selections. */
-    SerialConfig buildConfig() const;
+    /// Ask whether to delete the configuration @p name, and if so delete
+    /// it, or say why it could not be.
+    void confirmDelete( const QString& name );
 
-    /** Update button enabled/disabled states. */
-    void updateUiState();
+    /// Show whether the configuration of @p tile captures, or why it cannot.
+    void updateTile( ConnectionTile* tile );
 
-    /** Generate a save path for a new session based on log directory and port name. */
-    QString generateSavePath( const QString& portName ) const;
+    /// Update every tile and Stop all, after a session started or stopped.
+    void updateTiles();
 
-    /** Load the persisted log directory from plugin config. */
-    void loadLogDir();
-
-    /** Persist the log directory to plugin config. */
-    void saveLogDir();
-
-    // ── Shared state ─────────────────────────────────────────────────
-    Sessions* sessions_ = nullptr; ///< The captures shown; not owned.
-
-    // ── UI elements ──────────────────────────────────────────────────
-    QComboBox* portCombo_ = nullptr;
-    QPushButton* refreshButton_ = nullptr;
-
-    // Serial settings
-    QComboBox* baudCombo_ = nullptr;
-    QComboBox* dataBitsCombo_ = nullptr;
-    QComboBox* stopBitsCombo_ = nullptr;
-    QComboBox* parityCombo_ = nullptr;
-    QComboBox* flowControlCombo_ = nullptr;
-    QCheckBox* timestampCheckBox_ = nullptr;
-
-    // Action buttons
-    QPushButton* startButton_ = nullptr;
-    QPushButton* stopButton_ = nullptr;
-    QPushButton* stopAllButton_ = nullptr;
-
-    // Send command
-    QLineEdit* sendEdit_ = nullptr;
-    QPushButton* sendButton_ = nullptr;
-    QComboBox* lineEndingCombo_ = nullptr;
-
-    // Log directory
-    QLineEdit* logDirEdit_ = nullptr;
-    bool logDirSaveFailed_ = false; ///< The last save of the log directory failed.
-    QPushButton* logDirBrowseButton_ = nullptr;
-
-    // Sessions
-    QListWidget* sessionList_ = nullptr;
-    QLabel* statusLabel_ = nullptr;
+    ProfileStore* profiles_;
+    Sessions* sessions_;
+    QPushButton* stopAll_;
+    QLabel* empty_;
+    QVBoxLayout* tiles_;
+    QHash<QString, ConnectionTile*> tileByName_;
+    QHash<QString, QString> savedPortByName_; ///< The port each configuration has saved.
 };
 
 } // namespace serial_monitor

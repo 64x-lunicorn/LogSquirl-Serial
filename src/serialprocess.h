@@ -58,7 +58,7 @@ namespace serial_monitor {
 /**
  * Configuration for a serial port session.
  *
- * Populated from the PortWidget UI and passed to the SerialProcess
+ * Taken from a saved configuration (profiles.h) and passed to the SerialProcess
  * constructor.  Sensible defaults match the most common embedded
  * device configuration: 115200 8N1, no flow control, timestamps on.
  */

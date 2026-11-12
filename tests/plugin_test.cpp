@@ -30,19 +30,25 @@
 #include <cstring>
 #include <memory>
 
+#include "connectiontile.h"
 #include "fakehost.h"
 #include "plugin.h"
-#include "portwidget.h"
+#include "portdialog.h"
+#include "profiles.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
 #include "sessions.h"
+#include "sidebarwidget.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
+#include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -137,8 +143,9 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
                 REQUIRE_FALSE( settings.value( "serial/timestamps", true ).toBool() );
             }
 
-            THEN( "the open Serial Monitor dialog takes it over" )
+            THEN( "a new configuration in the dialog proposes it" )
             {
+                serial_monitor::g_state.dialog->newConfiguration();
                 auto* dialogTimestamps
                     = serial_monitor::g_state.dialog->findChild<QCheckBox*>( "timestamps" );
                 REQUIRE( dialogTimestamps );
@@ -513,6 +520,7 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
                     REQUIRE( host.sidebarTabs.isEmpty() );
                     REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
                     REQUIRE( serial_monitor::g_state.dialog == nullptr );
+                    REQUIRE( serial_monitor::g_state.profiles == nullptr );
                     REQUIRE( serial_monitor::g_state.sessions == nullptr );
                     REQUIRE_FALSE( serial_monitor::g_state.initialised );
                 }
@@ -522,6 +530,119 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
         }
     }
 }
+
+namespace {
+
+/// The tab the plugin registered.
+serial_monitor::SidebarWidget* sidebarTab( const FakeHost& host )
+{
+    REQUIRE( host.sidebarTabs.size() == 1 );
+    return static_cast<serial_monitor::SidebarWidget*>( host.sidebarTabs.first() );
+}
+
+} // namespace
+
+SCENARIO( "saved configurations survive a restart of LogSquirl", "[plugin]" )
+{
+    GIVEN( "a configuration saved in the dialog of an initialised plugin" )
+    {
+        FakeHost host;
+        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+        auto* dialog = serial_monitor::g_state.dialog;
+        dialog->findChild<QComboBox*>( "profile" )->setEditText( "board" );
+        dialog->findChild<QComboBox*>( "port" )->setEditText( "/dev/ttyUSB0" );
+        dialog->findChild<QPushButton*>( "saveProfile" )->click();
+        REQUIRE( sidebarTab( host )->tile( "board" ) );
+
+        WHEN( "the plugin is shut down and started again, as when LogSquirl restarts" )
+        {
+            logsquirl_plugin_shutdown();
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+
+            THEN( "the sidebar shows its tile again" )
+            {
+                const auto* tile = sidebarTab( host )->tile( "board" );
+                REQUIRE( tile );
+                REQUIRE(
+                    tile->findChild<QLabel*>( "summary" )->text().startsWith( "/dev/ttyUSB0\n" ) );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+}
+
+SCENARIO( "the sidebar opens the dialog", "[plugin]" )
+{
+    GIVEN( "an initialised plugin with a saved configuration" )
+    {
+        FakeHost host;
+        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+        serial_monitor::PortProfile profile;
+        profile.name = "board";
+        profile.serial.portName = "/dev/ttyUSB0";
+        REQUIRE( serial_monitor::g_state.profiles->upsert( profile ).isEmpty() );
+        auto* dialog = serial_monitor::g_state.dialog;
+
+        WHEN( "the tile's Edit… is clicked" )
+        {
+            sidebarTab( host )->tile( "board" )->findChild<QPushButton*>( "edit" )->click();
+
+            THEN( "the dialog opens with that configuration" )
+            {
+                REQUIRE( dialog->isVisible() );
+                REQUIRE( dialog->findChild<QComboBox*>( "profile" )->currentText() == "board" );
+                REQUIRE( dialog->findChild<QComboBox*>( "port" )->currentText() == "/dev/ttyUSB0" );
+            }
+        }
+
+        WHEN( "New configuration… is clicked" )
+        {
+            sidebarTab( host )->findChild<QPushButton*>( "newConfiguration" )->click();
+
+            THEN( "the dialog opens empty" )
+            {
+                REQUIRE( dialog->isVisible() );
+                REQUIRE( dialog->findChild<QComboBox*>( "profile" )->currentText().isEmpty() );
+                REQUIRE( dialog->findChild<QComboBox*>( "port" )->currentText().isEmpty() );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a tile's capture stops when the plugin shuts down", "[plugin]" )
+{
+    GIVEN( "an initialised plugin with a capturing tile" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+        serial_monitor::PortProfile profile;
+        profile.name = "board";
+        profile.serial.portName = device.devicePath();
+        profile.logDir = host.tempRoot() + "/logs";
+        REQUIRE( serial_monitor::g_state.profiles->upsert( profile ).isEmpty() );
+        sidebarTab( host )->tile( "board" )->findChild<QPushButton*>( "startStop" )->click();
+        REQUIRE( serial_monitor::g_state.sessions->portOf( "board" ) == device.devicePath() );
+        REQUIRE( host.followedFiles.size() == 1 );
+
+        WHEN( "the plugin is shut down" )
+        {
+            logsquirl_plugin_shutdown();
+
+            THEN( "the capture's file stays for its tab" )
+            {
+                REQUIRE( QFileInfo::exists( host.followedFiles.first() ) );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+}
+#endif
 
 // MSVC's default /EHsc assumes that functions of C linkage, like the host
 // API's, never throw, and may drop the handlers this test relies on.

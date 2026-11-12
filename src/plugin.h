@@ -41,9 +41,11 @@
 #include <QString>
 
 #include <cstddef>
+#include <exception>
 
 namespace serial_monitor {
-class PortWidget;
+class PortDialog;
+class ProfileStore;
 class Sessions;
 class SidebarWidget;
 } // namespace serial_monitor
@@ -61,8 +63,9 @@ struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     Sessions* sessions = nullptr;           ///< The running captures, which the views show.
-    PortWidget* dialog = nullptr;           ///< Serial session dialog.
-    SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for session control.
+    ProfileStore* profiles = nullptr;       ///< The saved port configurations (serial.ini).
+    PortDialog* dialog = nullptr;           ///< The dialog that edits a saved configuration.
+    SidebarWidget* sidebarWidget = nullptr; ///< The sidebar tab: one tile per configuration.
     bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
     /// The size of the host's table (init_ex()): a function added after
     /// LogSquirl 26.10 may be used only if LOGSQUIRL_HOST_API_HAS( hostApiSize,
@@ -83,5 +86,26 @@ void hostLog( int level, const QString& message );
 /// Show a host notification (no-op if not initialised).
 /// The host decodes the message as UTF-8.
 void hostNotify( const QString& message );
+
+/// Log that work for the host (@p what) failed, for @p reason.
+void logFailure( const char* what, const char* reason ) noexcept;
+
+/// Run work for the host, logging instead of throwing: the host is C, and
+/// an exception escaping into it would terminate LogSquirl.  Entry points
+/// and every slot the host's event loop runs (a click in the sidebar or the
+/// dialog) go through it.  Returns false if it threw.
+template <typename Work>
+bool guarded( const char* what, Work&& work ) noexcept
+{
+    try {
+        work();
+        return true;
+    } catch ( const std::exception& e ) {
+        logFailure( what, e.what() );
+    } catch ( ... ) {
+        logFailure( what, "unknown exception" );
+    }
+    return false;
+}
 
 } // namespace serial_monitor

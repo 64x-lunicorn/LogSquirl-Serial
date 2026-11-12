@@ -29,8 +29,10 @@
  * with its own file and tab.  It also keeps the result of the last port
  * scan, which every view shares.
  *
- * The dialog (PortWidget) and the sidebar (SidebarWidget) are only views
- * of it: they call its methods and update on its signals.  Starting,
+ * The sidebar (SidebarWidget) and its tiles are views of it: a tile starts
+ * the session of its saved configuration (profiles.h), named as the
+ * session's owner, and finds it again through portOf().  The views call
+ * its methods and update on its signals.  Starting,
  * stopping and errors are host notifications, sent from here; stopAll()
  * notifies nothing (the views say "All serial sessions stopped.", the
  * shutdown says nothing).
@@ -68,14 +70,18 @@ public:
     /**
      * Start capture for config.portName and open its log file in a
      * followed tab.  Refused, with a host notification saying why, if the
-     * baud rate is not one, the port cannot be opened, or another session
-     * writes to @p savePath; refused without a word if the port has a
-     * session already.  sessionStarted() follows a session that started.
+     * port has a session already (naming the configuration that started
+     * it), the baud rate is not one, the port cannot be opened, or another
+     * session writes to @p savePath.  sessionStarted() follows a session
+     * that started.
      *
      * @param savePath  Optional path to a .log file for persistent saving.
+     * @param owner     The saved configuration that starts it (profiles.h),
+     *                  if any: ownerOf() and portOf() tell it until it ends.
      * @return Whether the session started.
      */
-    bool startSession( const SerialConfig& config, const QString& savePath = {} );
+    bool startSession( const SerialConfig& config, const QString& savePath = {},
+                       const QString& owner = {} );
 
     /**
      * Stop the session of @p portName, keep its file for its tab, and say
@@ -122,6 +128,21 @@ public:
      * nullptr if it has none.  Valid until sessionStopped( portName ).
      */
     const SerialProcess* session( const QString& portName ) const;
+
+    /**
+     * The saved configuration whose session runs on @p portName (the owner
+     * given to startSession()); empty if the port has no session, or one
+     * started without a configuration.
+     */
+    QString ownerOf( const QString& portName ) const;
+
+    /**
+     * The port of the session that the saved configuration @p owner
+     * started; empty if it runs none.  A tile finds its session this way,
+     * not through the port saved in its configuration, which may have been
+     * edited since.
+     */
+    QString portOf( const QString& owner ) const;
 
     /** Names of the ports found by the most recent scan. */
     const QStringList& ports() const
@@ -182,6 +203,7 @@ private:
 
     QStringList ports_; ///< Result of the last port scan.
     QMap<QString, SerialProcess*> sessions_;
+    QMap<QString, QString> owners_; ///< Port → the configuration that started its session.
 };
 
 } // namespace serial_monitor

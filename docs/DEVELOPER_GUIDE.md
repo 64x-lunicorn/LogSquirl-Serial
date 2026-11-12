@@ -32,31 +32,32 @@ sequenceDiagram
     Host->>Plugin: logsquirl_plugin_init(api, handle)
     Plugin->>Plugin: Store api + handle in g_state
     Plugin->>Host: api->register_menu_action("Plugins", "Serial Monitor…", callback)
-    Plugin->>Plugin: Create Sessions, PortWidget (QDialog) and SidebarWidget
+    Plugin->>Plugin: Create Sessions, ProfileStore (serial.ini), PortDialog and SidebarWidget
     Plugin->>Host: api->register_sidebar_tab("Serial", sidebarWidget)
     Plugin-->>Host: return 0 (success)
 
-    Note over Host,Plugin: User clicks "Serial Monitor…" in Plugins menu
+    Note over Host,Plugin: User clicks "New configuration…" in the tab (or "Serial Monitor…" in Plugins)
 
-    Host->>Plugin: showSerialDialog() callback
-    Plugin->>Plugin: Show the PortWidget
+    Plugin->>Plugin: Show the PortDialog
+    Note over Plugin: User enters a name, a port and its settings, clicks Save
+    Plugin->>Plugin: ProfileStore::upsert() — changed(): the sidebar shows a new tile
 
-    Note over Plugin: User selects port, configures settings, clicks Start
+    Note over Plugin: User clicks ▶ Start on the tile
 
-    Plugin->>Plugin: Sessions::startSession() — SerialProcess::start() opens QSerialPort
-    Plugin->>Host: api->open_file(tempFilePath, follow=1)
-    Plugin->>Plugin: sessionStarted() — both views update
+    Plugin->>Plugin: Sessions::startSession(config, savePath, owner) — SerialProcess::start() opens QSerialPort
+    Plugin->>Host: api->open_file(logFilePath, follow=1)
+    Plugin->>Plugin: sessionStarted() — the tiles update
 
     Note over Host: New tab opens with live serial data
 
-    Note over Plugin: User clicks Stop
+    Note over Plugin: User clicks ■ Stop on the tile
 
     Plugin->>Plugin: SerialProcess::stop() + preserveTempFile(), sessionStopped()
 
     Note over Host: Tab stays open with captured output
 
     Host->>Plugin: logsquirl_plugin_shutdown()
-    Plugin->>Plugin: delete sidebar, stopAll(), delete dialog and sessions, clear g_state
+    Plugin->>Plugin: delete sidebar, stopAll(), delete dialog, store and sessions, clear g_state
 ```
 
 ## Class Diagram
@@ -67,7 +68,8 @@ classDiagram
         +LogSquirlHostApi* api
         +void* handle
         +Sessions* sessions
-        +PortWidget* dialog
+        +ProfileStore* profiles
+        +PortDialog* dialog
         +SidebarWidget* sidebarWidget
         +bool initialised
     }
@@ -111,7 +113,7 @@ classDiagram
     class Sessions {
         -QMap sessions_
         -QStringList ports_
-        +startSession(config, savePath) bool
+        +startSession(config, savePath, owner) bool
         +stopSession(port)
         +stopAll()
         +rotateSession(port)
@@ -120,6 +122,8 @@ classDiagram
         +activeSessionCount() int
         +activePorts() QStringList
         +session(port) SerialProcess*
+        +ownerOf(port) QString
+        +portOf(owner) QString
         +ports() QStringList
         +refreshPorts()
         sessionStarted(port)
@@ -128,42 +132,135 @@ classDiagram
         portsChanged()
     }
 
-    class PortWidget {
-        -Sessions* sessions_
-        -QComboBox* portCombo_
-        -QComboBox* baudCombo_
-        -QCheckBox* timestampCheckBox_
-        +loadDefaults()
-        -startCapture()
-        -stopCapture()
-        -buildConfig() SerialConfig
+    class PortProfile {
+        +QString name
+        +SerialConfig serial
+        +QString logDir
+    }
+
+    class ProfileStore {
+        +list() QList~PortProfile~
+        +find(name) optional~PortProfile~
+        +newProfile() PortProfile
+        +upsert(profile) QString
+        +remove(name) QString
+        changed()
+    }
+
+    class PortDialog {
+        +newConfiguration()
+        +editConfiguration(name)
     }
 
     class SidebarWidget {
-        -Sessions* sessions_
-        -QListWidget* sessionList_
-        +loadDefaults()
-        -startCapture()
-        -updatePortList()
+        +reload()
+        +tile(name) ConnectionTile*
+        newConfigurationRequested()
+        editRequested(name)
+    }
+
+    class ConnectionTile {
+        +name() QString
+        +setSummary(lines)
+        +setDetails(lines)
+        +setState(TileState)
+        startClicked()
+        stopClicked()
+        editClicked()
+        deleteClicked()
     }
 
     Sessions --> SerialProcess : creates & manages
-    PortWidget --> Sessions : view of
-    SidebarWidget --> Sessions : view of
+    ProfileStore --> PortProfile : saves
+    PortProfile --> SerialConfig : has
+    PortDialog --> ProfileStore : saves, deletes
+    SidebarWidget --> ProfileStore : lists, deletes
+    SidebarWidget --> ConnectionTile : one per profile
+    SidebarWidget --> Sessions : starts, stops, view of
     SerialProcess --> SerialConfig : uses
     PluginState --> Sessions : owns
-    PluginState --> PortWidget : owns
+    PluginState --> ProfileStore : owns
+    PluginState --> PortDialog : owns
     PluginState --> SidebarWidget : owns
 ```
 
-The dialog and the sidebar hold no session state of their own: they call
+The sidebar and the dialog hold no session state of their own: they call
 `Sessions` and refresh on its signals, so neither polls, and both stay in step
-whichever started a session or when one ends on its own (device unplugged, log
-file not writable). A view that shows a running session's counters live reads
-them from `Sessions::session(port)` on a timer of its own: they change on every
-line, so no signal announces them.
+when a session ends on its own (device unplugged, log file not writable). A
+view that shows a running session's counters live reads them from
+`Sessions::session(port)` on a timer of its own: they change on every line, so
+no signal announces them.
 
 ## Key Implementation Details
+
+### Saved configurations
+
+A configuration ([`src/profiles.h`](../src/profiles.h), `PortProfile`) is a
+name, a `SerialConfig` (port, baud rate, data bits, stop bits, parity, flow
+control, timestamps) and a log directory. The size at which a log file is
+rotated is not part of it: it is Configure's, for every capture
+(`sessionConfig()` adds it at Start).
+
+`ProfileStore` is the one owner of the configurations: they are saved in
+`serial.ini` in the directory the host's `get_config_dir` gives, as the array
+`profiles`, in the order they were first saved, next to the defaults Configure
+saves (group `serial`). Settings are saved as text (`8`, `1.5`, `even`,
+`rtscts`), and one that is not a setting loads as its default. `upsert()` and
+`remove()` return why they failed in words for the user, empty when they did,
+and emit `changed()` when they did; `remove()` refuses a configuration that
+captures (the plugin gives the store `Sessions::portOf()` to ask).
+`newProfile()` proposes Configure's baud rate and timestamps, and the log
+directory saved last (`serial/logDir`, where the sidebar of earlier versions
+kept its one log directory). Without a configuration directory, nothing is
+saved, and the dialog says why.
+
+The dialog ([`src/portdialog.h`](../src/portdialog.h), `PortDialog`) edits
+them: a name (choosing a saved one fills in its settings), the port (the ports
+of the last scan, or any typed in), the settings and the log directory, with
+Save and Delete. Save refuses, on the status line, a configuration without a
+name, without a port, without a baud rate, or with a log directory that is not
+a full path (`startProblem()`). It starts nothing: the tiles do.
+
+### The sidebar tab and its tiles
+
+The tab "Serial" ([`src/sidebarwidget.h`](../src/sidebarwidget.h)) is
+registered with `register_sidebar_tab` at init and unregistered at shutdown.
+It holds *New configuration…*, *Stop all*, and one tile per saved
+configuration in the order they were saved, rebuilt whenever the store saves
+or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
+
+- **The tile** ([`src/connectiontile.h`](../src/connectiontile.h)) is
+  LogSquirl-NATS's: a plain `QFrame` that knows nothing of serial ports — a
+  state dot, a title, a summary, details, Start / Stop, Edit… and Delete,
+  with a signal for each button. The tab sets its texts and its `TileState`;
+  a serial capture is stopped or running (`Connecting` and `Failed` are
+  unused). Keep the two copies alike.
+- **Summary**: the port, then the frame and flow control,
+  `115200 8N1 · no flow control` (`frameOf()`, `flowControlName()`).
+- **Details**: `running` while its capture runs; while another
+  configuration captures its port, `<port> is in use by "<name>"`.
+- **A tile and its session.** Sessions are keyed by port: a port runs one
+  capture at a time. Start passes the configuration's name as the session's
+  owner (`Sessions::startSession(config, savePath, owner)`), and the tile
+  finds its session with `Sessions::portOf(name)`, not through the port
+  saved in the configuration, which may have been edited while it runs (the
+  capture then goes on with the settings it started with, as the dialog
+  says, until it is stopped and started again). A second tile on a busy port
+  is refused by `Sessions`, with a notification naming the configuration
+  that holds the port (`Sessions::ownerOf(port)`); no refusal is silent.
+- **Start** finds the configuration in the store, says why when it cannot
+  start (`startProblem()`), and starts its capture into a new file of its
+  log directory (`savePathFor()`). **Delete** asks (`QMessageBox`), then
+  deletes through the store; it is hidden while the capture runs, and the
+  store refuses then too. **Edit…** and **New configuration…** emit
+  `editRequested(name)` and `newConfigurationRequested()`, which the plugin
+  connects to the dialog.
+- Every slot the host's event loop runs goes through `guarded()`
+  ([`src/plugin.h`](../src/plugin.h)).
+
+A running tile's counters, Rotate and Send come next (#51): they read
+`Sessions::session(portOf(name))` and call `rotateSession()` and
+`sendToSession()` with that port.
 
 ### Serial Port Discovery
 
@@ -292,7 +389,13 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[discoverports]` | Port discovery integration |
 | `[serialprocess]` | SerialProcess construction and defaults |
 | `[counters]` | A session's counters, against a pseudo-terminal |
-| `[sessions]` | Session bookkeeping in `Sessions` |
+| `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
-| `[portwidget]` | The dialog as a view of the sessions |
-| `[sidebarwidget]` | The sidebar panel |
+| `[profiles]` | The saved configurations and their store, against a FakeHost's `serial.ini` |
+| `[tile]` | The tile on its own: states, buttons, colours |
+| `[portdialog]` | The dialog: save, edit, delete, what it refuses |
+| `[sidebarwidget]` | The sidebar tab: tiles created, updated, deleted; Start and Stop against pseudo-terminals, two at once, a busy port |
+| `[plugin]` | The entry points; configurations surviving a restart; the sidebar opening the dialog |
+
+A modal question a click opens (a tile's Delete) is answered from a timer
+started before the click (`tests/modal.h`).
