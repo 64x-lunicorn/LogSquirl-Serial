@@ -135,14 +135,21 @@ bool Sessions::startSession( const SerialConfig& config, const QString& savePath
 
     auto* proc = new SerialProcess( config, savePath, this );
 
-    connect( proc, &SerialProcess::finished, this,
-             [ this, name ]() { onSessionFinished( name ); } );
+    // What the session reports comes in the host's event loop: nothing may
+    // throw into it.
+    connect( proc, &SerialProcess::finished, this, [ this, name ] {
+        guarded( "ending a serial capture", [ this, &name ] { onSessionFinished( name ); } );
+    } );
 
-    connect( proc, &SerialProcess::errorOccurred, this,
-             [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
+    connect( proc, &SerialProcess::errorOccurred, this, [ this, name ]( const QString& msg ) {
+        guarded( "reporting a serial capture's error",
+                 [ this, &name, &msg ] { onSessionError( name, msg ); } );
+    } );
 
-    connect( proc, &SerialProcess::sizeLimitReached, this,
-             [ this, name ]() { onSizeLimitReached( name ); } );
+    connect( proc, &SerialProcess::sizeLimitReached, this, [ this, name ] {
+        guarded( "starting a new log file at a serial capture's size limit",
+                 [ this, &name ] { onSizeLimitReached( name ); } );
+    } );
 
     if ( !proc->start() ) {
         // start() has reported why through errorOccurred()

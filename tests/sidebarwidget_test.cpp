@@ -320,6 +320,19 @@ SCENARIO( "a tile asks the plugin to open the dialog", "[sidebarwidget]" )
                 REQUIRE( edits == QStringList{ "board" } );
             }
         }
+
+        WHEN( "opening the dialog for the tile's Edit… throws" )
+        {
+            QObject::connect( &sidebar, &SidebarWidget::editRequested,
+                              []( const QString& ) { throw std::runtime_error( "no memory" ); } );
+            REQUIRE_NOTHROW( click( sidebar.tile( "board" ), "edit" ) );
+
+            THEN( "the failure is logged, not thrown into LogSquirl" )
+            {
+                REQUIRE( host.logs.filter( "Serial Monitor plugin" ).filter( "no memory" ).size()
+                         == 1 );
+            }
+        }
     }
 }
 

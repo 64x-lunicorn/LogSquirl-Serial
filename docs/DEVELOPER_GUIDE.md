@@ -286,7 +286,10 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   `editRequested(name)` and `newConfigurationRequested()`, which the plugin
   connects to the dialog.
 - Every slot the host's event loop runs goes through `guarded()`
-  ([`src/plugin.h`](../src/plugin.h)).
+  ([`src/plugin.h`](../src/plugin.h)): the tiles' buttons, the timer, and
+  `Sessions`' handlers of what a `SerialProcess` reports (`finished`,
+  `errorOccurred`, `sizeLimitReached`), which write files and rescan the
+  ports. An exception there is logged; it would end LogSquirl.
 
 ### Serial Port Discovery
 

@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the plugin still runs there.
 
 ### Fixed
+- **An error when a capture ends, fails or reaches its size limit no longer
+  ends LogSquirl.** What a running capture reports — that it ended, an
+  error, or that its log file reached the size limit and goes on in a new
+  one — is handled in LogSquirl's event loop; an exception there, such as
+  running out of memory, is now logged instead of ending LogSquirl. So is
+  one when a tile's Edit… opens the dialog (#53).
 - **An error in the plugin no longer ends LogSquirl.** An exception in the
   plugin's start, shutdown, Configure or its menu entry is logged instead
   of escaping into LogSquirl; a start that fails is undone, the sidebar tab

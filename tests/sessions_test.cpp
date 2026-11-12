@@ -880,4 +880,64 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
         sessions.stopAll();
     }
 }
+
+// What a session reports reaches Sessions in LogSquirl's event loop: an
+// exception there must be logged, not escape into the host (#53).  The
+// FakeHost's log throws on the message a handler writes, or a slot on the
+// signal a handler emits throws, as a failing allocation or container could.
+SCENARIO( "an exception in what a session reports does not escape", "[sessions][guarded]" )
+{
+    GIVEN( "a running session" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
+        auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
+        REQUIRE( session );
+        const auto failures = [ &host ] {
+            return host.logs.filter( "Serial Monitor plugin" ).filter( "failed: " );
+        };
+
+        WHEN( "logging its end throws" )
+        {
+            host.failLogContaining = "session for";
+            REQUIRE_NOTHROW( session->stop() );
+
+            THEN( "the failure is logged" )
+            {
+                REQUIRE( failures().size() == 1 );
+                REQUIRE( failures().first().contains( "the log is full" ) );
+            }
+        }
+
+        WHEN( "logging its error throws" )
+        {
+            host.failLogContaining = "the cable is out";
+            REQUIRE_NOTHROW( Q_EMIT session->errorOccurred( "the cable is out" ) );
+
+            THEN( "the failure is logged" )
+            {
+                REQUIRE( failures().size() == 1 );
+                REQUIRE( failures().first().contains( "the log is full" ) );
+            }
+        }
+
+        WHEN( "announcing the new file at its size limit throws" )
+        {
+            QObject::connect( &sessions, &Sessions::sessionChanged,
+                              []( const QString& ) { throw std::runtime_error( "no memory" ); } );
+            REQUIRE_NOTHROW( Q_EMIT session->sizeLimitReached() );
+
+            THEN( "the failure is logged" )
+            {
+                REQUIRE( failures().size() == 1 );
+                REQUIRE( failures().first().contains( "no memory" ) );
+            }
+        }
+
+        host.failLogContaining.clear();
+        sessions.stopAll();
+    }
+}
 #endif

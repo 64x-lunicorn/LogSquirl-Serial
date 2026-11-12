@@ -320,8 +320,10 @@ void SidebarWidget::reload()
         connect( tile, &ConnectionTile::stopClicked, this, [ this, name ] {
             guarded( "stopping a serial capture", [ this, &name ] { stop( name ); } );
         } );
-        connect( tile, &ConnectionTile::editClicked, this,
-                 [ this, name ] { Q_EMIT editRequested( name ); } );
+        connect( tile, &ConnectionTile::editClicked, this, [ this, name ] {
+            guarded( "editing a serial configuration",
+                     [ this, &name ] { Q_EMIT editRequested( name ); } );
+        } );
         connect( tile, &ConnectionTile::deleteClicked, this, [ this, name ] {
             guarded( "deleting a serial configuration",
                      [ this, &name ] { confirmDelete( name ); } );
