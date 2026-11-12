@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   port, its frame such as `115200 8N1` and its flow control, and Start /
   Stop, Edit… and Delete; *New configuration…* opens an empty dialog, and a
   new configuration proposes the defaults of Configure and the log directory
-  saved last. Tiles on different ports capture at the same time; a tile
+  saved last. A configuration edited in the dialog and saved under another
+  name is renamed, tile and all, unless its capture runs or the name is
+  taken. Tiles on different ports capture at the same time; a tile
   whose port another one captures says so, and its Start is refused with a
   notification naming the configuration that holds the port. The sidebar's
   inline form and its list of active sessions are gone, as is the dialog's

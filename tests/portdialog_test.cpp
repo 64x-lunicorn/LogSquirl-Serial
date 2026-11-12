@@ -219,6 +219,99 @@ SCENARIO( "saving in the dialog creates a tile, editing updates it, deleting rem
     }
 }
 
+SCENARIO( "a new name saved in the dialog renames the configuration it edits", "[portdialog]" )
+{
+    GIVEN( "two saved configurations, the first opened for editing" )
+    {
+        FakeHost host;
+        World world( host );
+        world.dialog.newConfiguration();
+        enter( world.dialog, "board", "/dev/ttyUSB0" );
+        save( world.dialog );
+        world.dialog.newConfiguration();
+        enter( world.dialog, "console", "/dev/ttyUSB1" );
+        save( world.dialog );
+        world.dialog.newConfiguration();
+        world.dialog.editConfiguration( "board" );
+
+        WHEN( "it is given a new name and saved" )
+        {
+            child<QComboBox>( world.dialog, "profile" )->setEditText( "main" );
+            child<QComboBox>( world.dialog, "port" )->setEditText( "/dev/ttyACM0" );
+            save( world.dialog );
+
+            THEN( "the configuration is renamed where it was, with its changes" )
+            {
+                QStringList names;
+                for ( const auto& profile : world.profiles.list() ) {
+                    names << profile.name;
+                }
+                REQUIRE( names == QStringList{ "main", "console" } );
+                REQUIRE( world.profiles.find( "main" )->serial.portName == "/dev/ttyACM0" );
+                REQUIRE( statusOf( world.dialog ).contains( "main" ) );
+            }
+
+            THEN( "its tile has the new name, and no tile is left with the old one" )
+            {
+                REQUIRE( world.sidebar.tile( "main" ) );
+                REQUIRE_FALSE( world.sidebar.tile( "board" ) );
+                REQUIRE( world.sidebar.findChildren<serial_monitor::ConnectionTile*>().size()
+                         == 2 );
+            }
+
+            AND_WHEN( "it is renamed once more" )
+            {
+                child<QComboBox>( world.dialog, "profile" )->setEditText( "primary" );
+                save( world.dialog );
+
+                THEN( "the renamed configuration is renamed again" )
+                {
+                    REQUIRE( world.profiles.list().size() == 2 );
+                    REQUIRE( world.profiles.find( "primary" ) );
+                    REQUIRE_FALSE( world.profiles.find( "main" ) );
+                }
+            }
+        }
+
+        WHEN( "it is given the name of the other configuration and saved" )
+        {
+            child<QComboBox>( world.dialog, "profile" )->setEditText( "console" );
+            child<QComboBox>( world.dialog, "port" )->setEditText( "/dev/ttyACM0" );
+            save( world.dialog );
+
+            THEN( "it is refused, both stay as they were, and the dialog says why" )
+            {
+                REQUIRE( world.profiles.list().size() == 2 );
+                REQUIRE( world.profiles.find( "board" )->serial.portName == "/dev/ttyUSB0" );
+                REQUIRE( world.profiles.find( "console" )->serial.portName == "/dev/ttyUSB1" );
+                REQUIRE( statusOf( world.dialog ).contains( "already" ) );
+            }
+        }
+    }
+
+    GIVEN( "a new configuration set up in the dialog" )
+    {
+        FakeHost host;
+        World world( host );
+        world.dialog.newConfiguration();
+        enter( world.dialog, "board", "/dev/ttyUSB0" );
+        save( world.dialog );
+
+        WHEN( "New configuration… sets up another, which is saved" )
+        {
+            world.dialog.newConfiguration();
+            enter( world.dialog, "console", "/dev/ttyUSB1" );
+            save( world.dialog );
+
+            THEN( "both are saved: a new configuration renames none" )
+            {
+                REQUIRE( world.profiles.find( "board" ) );
+                REQUIRE( world.profiles.find( "console" ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "the dialog follows configurations deleted from their tile", "[portdialog]" )
 {
     GIVEN( "a dialog listing a saved configuration" )
@@ -362,6 +455,30 @@ SCENARIO( "saving a configuration that captures says the capture runs on", "[por
             {
                 REQUIRE( world.profiles.find( "board" ) );
                 REQUIRE( statusOf( world.dialog ).contains( "stop" ) );
+            }
+        }
+
+        WHEN( "it is given a new name in the dialog and saved" )
+        {
+            world.dialog.editConfiguration( "board" );
+            child<QComboBox>( world.dialog, "profile" )->setEditText( "main" );
+            save( world.dialog );
+
+            THEN( "it is refused, and the dialog says to stop it first" )
+            {
+                REQUIRE( world.profiles.list().size() == 1 );
+                REQUIRE( world.profiles.find( "board" ) );
+                REQUIRE( statusOf( world.dialog ).contains( "stop" ) );
+            }
+
+            THEN( "its tile keeps its running capture" )
+            {
+                REQUIRE( world.sessions.portOf( "board" ) == device.devicePath() );
+                REQUIRE( world.sidebar.tile( "board" )
+                             ->findChild<QLabel*>( "state" )
+                             ->property( "state" )
+                             .toString()
+                         == "running" );
             }
         }
 

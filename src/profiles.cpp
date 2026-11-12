@@ -263,6 +263,37 @@ QString ProfileStore::upsert( const PortProfile& profile )
     return {};
 }
 
+QString ProfileStore::rename( const QString& oldName, const PortProfile& profile )
+{
+    if ( profile.name == oldName || profile.name.isEmpty() || settingsFile_.isEmpty() ) {
+        return upsert( profile ); // which says why it cannot save
+    }
+    if ( isRunning_ && isRunning_( oldName ) ) {
+        return QStringLiteral( "The configuration %1 is capturing: stop it to rename it." )
+            .arg( oldName );
+    }
+    auto profiles = list();
+    const auto named = [ &profiles ]( const QString& name ) {
+        return std::find_if( profiles.begin(), profiles.end(),
+                             [ &name ]( const auto& p ) { return p.name == name; } );
+    };
+    if ( named( profile.name ) != profiles.end() ) {
+        return QStringLiteral( "There is already a configuration %1: choose another name." )
+            .arg( profile.name );
+    }
+    const auto existing = named( oldName );
+    if ( existing == profiles.end() ) {
+        return QStringLiteral( "There is no saved configuration %1." ).arg( oldName );
+    }
+    *existing = profile;
+    if ( !write( profiles, profile.logDir ) ) {
+        return QStringLiteral( "The configuration %1 could not be saved to %2." )
+            .arg( profile.name, QDir::toNativeSeparators( settingsFile_ ) );
+    }
+    Q_EMIT changed();
+    return {};
+}
+
 QString ProfileStore::remove( const QString& name )
 {
     if ( isRunning_ && isRunning_( name ) ) {

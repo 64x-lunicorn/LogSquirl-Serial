@@ -26,7 +26,10 @@
  *
  *   - the configuration's name: choosing a saved one fills in its settings,
  *     Save saves the settings under the name entered (a new tile in the
- *     sidebar, or the tile of that name updated), Delete removes it
+ *     sidebar, or the tile of that name updated), Delete removes it.  While
+ *     a saved configuration is edited (chosen, opened with Edit…, or saved
+ *     last), a new name renames it and its tile; that is refused while it
+ *     captures, or when another configuration has the name
  *   - the port: the ports found by the last scan, Refresh to scan again;
  *     any other port can be typed in (a device not plugged in yet)
  *   - the baud rate (a common one, or any other typed in), data bits, stop
@@ -102,7 +105,8 @@ private:
     /// Fill in the settings of the saved configuration chosen in the list.
     void loadProfile( int index );
 
-    /// Save the settings entered as the configuration named in the list.
+    /// Save the settings entered as the configuration named in the list;
+    /// a new name renames the configuration edited.
     void saveProfile();
 
     /// Fill the list with the saved configurations' names, @p current chosen.
@@ -131,6 +135,9 @@ private:
     QPushButton* browseLogDirButton_;
     QLabel* statusLabel_;
     bool fillingProfiles_ = false; ///< The list is being filled: nothing is loaded.
+    /// The saved configuration the dialog edits (loaded or saved last): Save
+    /// renames it when the name entered differs.  Empty for a new one.
+    QString editing_;
 };
 
 } // namespace serial_monitor

@@ -207,10 +207,13 @@ rotated is not part of it: it is Configure's, for every capture
 `serial.ini` in the directory the host's `get_config_dir` gives, as the array
 `profiles`, in the order they were first saved, next to the defaults Configure
 saves (group `serial`). Settings are saved as text (`8`, `1.5`, `even`,
-`rtscts`), and one that is not a setting loads as its default. `upsert()` and
-`remove()` return why they failed in words for the user, empty when they did,
-and emit `changed()` when they did; `remove()` refuses a configuration that
-captures (the plugin gives the store `Sessions::portOf()` to ask).
+`rtscts`), and one that is not a setting loads as its default. `upsert()`,
+`rename()` and `remove()` return why they failed in words for the user, empty
+when they did, and emit `changed()` when they did; `remove()` and `rename()`
+refuse a configuration that captures (the plugin gives the store
+`Sessions::portOf()` to ask): its session's owner is its name, so renaming it
+would part the tile from its capture. `rename(oldName, profile)` replaces the
+configuration where it is in the list, and refuses a name another one has.
 `newProfile()` proposes Configure's baud rate and timestamps, and the log
 directory saved last (`serial/logDir`, where the sidebar of earlier versions
 kept its one log directory). Without a configuration directory, nothing is
@@ -221,7 +224,11 @@ them: a name (choosing a saved one fills in its settings), the port (the ports
 of the last scan, or any typed in), the settings and the log directory, with
 Save and Delete. Save refuses, on the status line, a configuration without a
 name, without a port, without a baud rate, or with a log directory that is not
-a full path (`startProblem()`). It starts nothing: the tiles do.
+a full path (`startProblem()`). It remembers the saved configuration it edits
+(chosen, opened with Edit…, or saved last; none after *New configuration…*):
+Save under another name renames that one (`ProfileStore::rename()`), so its
+tile is renamed rather than joined by a second. It starts nothing: the tiles
+do.
 
 ### The sidebar tab and its tiles
 

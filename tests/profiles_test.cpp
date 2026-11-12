@@ -172,6 +172,61 @@ SCENARIO( "configurations are saved, replaced and deleted by name", "[profiles]"
                 REQUIRE( store.list().size() == 2 );
             }
         }
+
+        WHEN( "the first is saved under a new name, with another port" )
+        {
+            auto renamed = first;
+            renamed.name = "main";
+            renamed.serial.portName = "/dev/ttyACM0";
+            REQUIRE( store.rename( "board", renamed ).isEmpty() );
+
+            THEN( "it is renamed where it was, with its change, and the change announced once" )
+            {
+                REQUIRE( namesOf( store.list() ) == QStringList{ "main", "console" } );
+                REQUIRE( store.find( "main" )->serial.portName == "/dev/ttyACM0" );
+                REQUIRE( changed == 1 );
+            }
+        }
+
+        WHEN( "the first is saved under its own name through rename" )
+        {
+            first.serial.portName = "/dev/ttyACM0";
+            REQUIRE( store.rename( "board", first ).isEmpty() );
+
+            THEN( "it is saved as by upsert" )
+            {
+                REQUIRE( namesOf( store.list() ) == QStringList{ "board", "console" } );
+                REQUIRE( store.find( "board" )->serial.portName == "/dev/ttyACM0" );
+            }
+        }
+
+        WHEN( "the first is renamed to the name of the second" )
+        {
+            auto renamed = first;
+            renamed.name = "console";
+            const auto problem = store.rename( "board", renamed );
+
+            THEN( "it is refused, saying why, and nothing changes" )
+            {
+                REQUIRE( problem.contains( "already" ) );
+                REQUIRE( namesOf( store.list() ) == QStringList{ "board", "console" } );
+                REQUIRE( store.find( "console" )->serial.portName == "/dev/ttyUSB1" );
+                REQUIRE( changed == 0 );
+            }
+        }
+
+        WHEN( "a configuration that is not saved is renamed" )
+        {
+            auto renamed = first;
+            renamed.name = "main";
+            const auto problem = store.rename( "nothing", renamed );
+
+            THEN( "the store says so, and nothing changes" )
+            {
+                REQUIRE( problem.contains( "nothing" ) );
+                REQUIRE( changed == 0 );
+            }
+        }
     }
 
     GIVEN( "a store that knows which configurations capture" )
@@ -190,6 +245,20 @@ SCENARIO( "configurations are saved, replaced and deleted by name", "[profiles]"
             {
                 REQUIRE( problem.contains( "stop" ) );
                 REQUIRE( store.find( "board" ) );
+            }
+        }
+
+        WHEN( "the capturing configuration is renamed" )
+        {
+            auto renamed = boardProfile();
+            renamed.name = "main";
+            const auto problem = store.rename( "board", renamed );
+
+            THEN( "it is refused: its capture is known by its name, it must be stopped first" )
+            {
+                REQUIRE( problem.contains( "stop" ) );
+                REQUIRE( store.find( "board" ) );
+                REQUIRE_FALSE( store.find( "main" ) );
             }
         }
     }

@@ -128,8 +128,11 @@ until then each has a marked placeholder in [Usage](#usage):
      configuration directory are captures temporary files, removed when
      LogSquirl quits — and then no configuration can be saved.
    - **Save** — the configuration gets a tile in the Serial tab, or its
-     tile is updated.  Saved under another name, it is another
-     configuration with a tile of its own.  **Delete** removes it.  The
+     tile is updated.  A configuration you edit (opened with Edit… or
+     chosen from the list) saved under another name is renamed, and so is
+     its tile; that is refused while its capture runs (stop it first), and
+     when another configuration already has the name.  For another
+     configuration, use *New configuration…*.  **Delete** removes it.  The
      configurations are saved in `serial.ini` in the plugin's configuration
      directory, so they are there again after a restart.
 

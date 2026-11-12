@@ -255,6 +255,7 @@ void PortDialog::showProfile( const PortProfile& profile )
 
 void PortDialog::newConfiguration()
 {
+    editing_.clear();
     fillProfileList( {} );
     showProfile( profiles_->newProfile() );
     statusLabel_->setText(
@@ -265,6 +266,7 @@ void PortDialog::newConfiguration()
 
 void PortDialog::editConfiguration( const QString& name )
 {
+    editing_.clear();
     fillProfileList( name );
     const int index = profileCombo_->findText( name );
     if ( index >= 0 ) {
@@ -303,6 +305,7 @@ void PortDialog::loadProfile( int index )
         return;
     }
     showProfile( *profile );
+    editing_ = name;
     statusLabel_->setText( QStringLiteral( "Configuration %1 loaded." ).arg( name ) );
 }
 
@@ -317,9 +320,24 @@ void PortDialog::saveProfile()
         statusLabel_->setText( problem );
         return;
     }
+    // A new name for the configuration edited renames it, unless it was
+    // deleted meanwhile: it is then saved as a new one.
+    const auto renamed
+        = !editing_.isEmpty() && editing_ != profile.name && profiles_->find( editing_ )
+              ? editing_
+              : QString();
     // The list follows the store (ProfileStore::changed), the name chosen.
-    if ( const auto problem = profiles_->upsert( profile ); !problem.isEmpty() ) {
+    const auto problem
+        = renamed.isEmpty() ? profiles_->upsert( profile ) : profiles_->rename( renamed, profile );
+    if ( !problem.isEmpty() ) {
         statusLabel_->setText( problem );
+        return;
+    }
+    editing_ = profile.name;
+    if ( !renamed.isEmpty() ) {
+        statusLabel_->setText( QStringLiteral( "Configuration %1 renamed to %2: start it from its "
+                                               "tile in the Serial sidebar." )
+                                   .arg( renamed, profile.name ) );
         return;
     }
     if ( !sessions_->portOf( profile.name ).isEmpty() ) {
@@ -340,6 +358,7 @@ void PortDialog::deleteConfiguration( const QString& name )
         statusLabel_->setText( problem );
         return;
     }
+    editing_.clear();
     fillProfileList( {} );
     statusLabel_->setText( QStringLiteral( "Configuration %1 deleted." ).arg( name ) );
 }

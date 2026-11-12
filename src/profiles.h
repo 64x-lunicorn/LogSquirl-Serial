@@ -33,7 +33,7 @@
  * directory (get_config_dir), as the array "profiles", in the order they
  * were first saved, next to the defaults Configure saves (group "serial").
  * A ProfileStore opened on that file is their one owner: the dialog and the
- * sidebar list, find, save and delete them through it, and it remembers the
+ * sidebar list, find, save, rename and delete them through it, and it remembers the
  * log directory saved last, which a new configuration proposes (the key the
  * sidebar of earlier versions saved its log directory under).  When it
  * cannot save or delete, it says why, in words for the user.  It reads the
@@ -124,6 +124,13 @@ public:
     /// name where it is in the list, or after the others, and remember its
     /// log directory for newProfile().  Empty if it was saved, else why not.
     QString upsert( const PortProfile& profile );
+
+    /// Save @p profile in place of the configuration named @p oldName,
+    /// where it is in the list: a rename when its name differs, upsert()
+    /// when it does not.  Refused while @p oldName captures (its capture is
+    /// known by its name), when it is not saved, and when another
+    /// configuration has the new name.  Empty if it was saved, else why not.
+    QString rename( const QString& oldName, const PortProfile& profile );
 
     /// Delete the configuration named @p name, unless it captures.  Empty
     /// if it was deleted, else why not.
