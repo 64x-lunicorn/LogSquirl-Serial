@@ -303,14 +303,18 @@ When a session starts:
 
 1. A `QTemporaryDir` is created for this session, named after the process:
    `logsquirl-serial-<pid>-XXXXXX` (`src/tempdirs.h`)
-2. A temp file is opened inside it: `serial_<portName>.log`
-3. `QSerialPort` is configured and opened in `ReadOnly` mode
+2. One log file is opened for the capture, never two: the configured save
+   path (appended to, so Stop and Start keep the earlier capture), or, when
+   there is none, a new temp file `serial_<portName>.log` inside that
+   directory
+3. `QSerialPort` is configured and opened in `ReadWrite` mode (Send needs
+   to write)
 4. The `readyRead` signal triggers `onReadyRead()`:
    - Data is read into a buffer
    - Complete lines (split on `\n`) are processed
    - If timestamps are enabled, `[YYYY-MM-DD HH:mm:ss.zzz] ` is prepended
-   - Each line is written to the temp file (and save file if enabled)
-   - Files are flushed after each line for real-time tailing
+   - Each line is written to that one log file
+   - The file is flushed after each line for real-time tailing
 
 ### Timestamp Format
 

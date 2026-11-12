@@ -55,13 +55,6 @@
 
 namespace serial_monitor {
 
-/**
- * Configuration for a serial port session.
- *
- * Taken from a saved configuration (profiles.h) and passed to the SerialProcess
- * constructor.  Sensible defaults match the most common embedded
- * device configuration: 115200 8N1, no flow control, timestamps on.
- */
 /// Line ending appended to transmitted data.
 enum class TxLineEnding {
     None, ///< No line ending appended.
@@ -76,6 +69,13 @@ constexpr qint64 kBytesPerMiB = 1024 * 1024;
 /// Size in MiB at which a log file is rotated unless the user chose another.
 constexpr int kDefaultMaxFileMiB = 1024;
 
+/**
+ * Configuration for a serial port session.
+ *
+ * Taken from a saved configuration (profiles.h) and passed to the SerialProcess
+ * constructor.  Sensible defaults match the most common embedded
+ * device configuration: 115200 8N1, no flow control, timestamps on.
+ */
 struct SerialConfig {
     QString portName;
     qint32 baudRate = 115200;
