@@ -30,14 +30,16 @@
  *      and stop buttons.
  *   4. A "Stop All" button when multiple sessions are running.
  *
- * Session logic is delegated entirely to PortWidget so that the
- * dialog and sidebar remain in sync at all times.
+ * Session logic is in the Sessions, of which both the dialog and the
+ * sidebar are views: each updates on the Sessions' signals, so both stay
+ * in sync whichever started or stopped a session, and when one ends on its
+ * own.
  */
 
 #include "sidebarwidget.h"
 #include "baudrate.h"
 #include "plugin.h"
-#include "portwidget.h"
+#include "sessions.h"
 
 #include <QDir>
 #include <QFileDialog>
@@ -67,9 +69,9 @@ QString defaultLogDir()
 
 // ── Construction ────────────────────────────────────────────────────────
 
-SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
+SidebarWidget::SidebarWidget( Sessions* sessions, QWidget* parent )
     : QWidget( parent )
-    , portWidget_( portWidget )
+    , sessions_( sessions )
 {
     auto* mainLayout = new QVBoxLayout( this );
     mainLayout->setContentsMargins( 4, 4, 4, 4 );
@@ -234,7 +236,7 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     mainLayout->addStretch();
 
     // ── Connections ──────────────────────────────────────────────────
-    connect( refreshButton_, &QPushButton::clicked, this, &SidebarWidget::refreshPorts );
+    connect( refreshButton_, &QPushButton::clicked, sessions_, &Sessions::refreshPorts );
     connect( startButton_, &QPushButton::clicked, this, &SidebarWidget::startCapture );
     connect( stopButton_, &QPushButton::clicked, this, &SidebarWidget::stopSelectedCapture );
     connect( stopAllButton_, &QPushButton::clicked, this, &SidebarWidget::stopAllCaptures );
@@ -254,32 +256,24 @@ SidebarWidget::SidebarWidget( PortWidget* portWidget, QWidget* parent )
     // Load defaults from config
     loadDefaults();
 
-    // Periodic refresh of line counts (every 1 second)
-    refreshTimer_ = new QTimer( this );
-    refreshTimer_->setInterval( 1000 );
-    connect( refreshTimer_, &QTimer::timeout, this, &SidebarWidget::refreshSessionList );
-    refreshTimer_->start();
+    // Follow the sessions, whichever view starts or stops them
+    connect( sessions_, &Sessions::portsChanged, this, &SidebarWidget::updatePortList );
+    connect( sessions_, &Sessions::sessionStarted, this, &SidebarWidget::updatePortList );
+    connect( sessions_, &Sessions::sessionStopped, this, &SidebarWidget::updatePortList );
 
-    connect( portWidget_, &PortWidget::portsChanged, this, &SidebarWidget::updatePortList );
-
-    // Initial populate.  PortWidget has scanned the ports already.
+    // Initial populate.  The Sessions have scanned the ports already.
     loadLogDir();
     updatePortList();
 }
 
 // ── Private slots ───────────────────────────────────────────────────────
 
-void SidebarWidget::refreshPorts()
-{
-    portWidget_->refreshPorts();
-}
-
 void SidebarWidget::updatePortList()
 {
     const auto currentSelection = currentPortName();
     portCombo_->clear();
 
-    const auto& ports = portWidget_->ports();
+    const auto& ports = sessions_->ports();
     if ( ports.isEmpty() ) {
         portCombo_->addItem( "(no ports)" );
         portCombo_->setEnabled( false );
@@ -287,7 +281,7 @@ void SidebarWidget::updatePortList()
     else {
         portCombo_->setEnabled( true );
         for ( const auto& name : ports ) {
-            if ( portWidget_->isSessionActive( name ) ) {
+            if ( sessions_->isSessionActive( name ) ) {
                 portCombo_->addItem( name + " \u25CF", name );
             }
             else {
@@ -314,8 +308,7 @@ void SidebarWidget::startCapture()
 
     const auto config = buildConfig();
     const auto savePath = generateSavePath( name );
-    portWidget_->startSession( config, savePath );
-    updatePortList();
+    sessions_->startSession( config, savePath );
 }
 
 void SidebarWidget::stopSelectedCapture()
@@ -325,17 +318,14 @@ void SidebarWidget::stopSelectedCapture()
         return;
     }
 
-    portWidget_->stopSession( name );
-    updatePortList();
+    sessions_->stopSession( name );
 }
 
 void SidebarWidget::stopAllCaptures()
 {
-    portWidget_->stopAll();
+    sessions_->stopAll();
 
     hostNotify( "All serial sessions stopped." );
-
-    updatePortList();
 }
 
 void SidebarWidget::sendCommand()
@@ -348,7 +338,7 @@ void SidebarWidget::sendCommand()
     // Only ever send to the selected port.  Another device may react to
     // the command in ways nobody intended.
     const auto name = currentPortName();
-    if ( !portWidget_->isSessionActive( name ) ) {
+    if ( !sessions_->isSessionActive( name ) ) {
         hostNotify(
             name.isEmpty()
                 ? QString( "Select a port with a running capture to send a command." )
@@ -357,18 +347,8 @@ void SidebarWidget::sendCommand()
     }
 
     const auto lineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
-    portWidget_->sendToSession( name, text.toUtf8(), lineEnding );
+    sessions_->sendToSession( name, text.toUtf8(), lineEnding );
     sendEdit_->clear();
-}
-
-void SidebarWidget::refreshSessionList()
-{
-    // A session can end and another start between two refreshes, so the
-    // ports are compared, not their number.
-    if ( portWidget_->activePorts() != shownSessions_ ) {
-        rebuildSessionList();
-        updateUiState();
-    }
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────
@@ -377,8 +357,7 @@ void SidebarWidget::rebuildSessionList()
 {
     sessionList_->clear();
 
-    const auto ports = portWidget_->activePorts();
-    shownSessions_ = ports;
+    const auto ports = sessions_->activePorts();
     for ( const auto& portName : ports ) {
         auto* item = new QListWidgetItem();
         sessionList_->addItem( item );
@@ -403,15 +382,11 @@ void SidebarWidget::rebuildSessionList()
         stopBtn->setToolTip( "Stop this session" );
         rowLayout->addWidget( stopBtn );
 
-        connect( rotateBtn, &QPushButton::clicked, this, [ this, portName ]() {
-            portWidget_->rotateSession( portName );
-            updatePortList();
-        } );
+        connect( rotateBtn, &QPushButton::clicked, this,
+                 [ this, portName ]() { sessions_->rotateSession( portName ); } );
 
-        connect( stopBtn, &QPushButton::clicked, this, [ this, portName ]() {
-            portWidget_->stopSession( portName );
-            updatePortList();
-        } );
+        connect( stopBtn, &QPushButton::clicked, this,
+                 [ this, portName ]() { sessions_->stopSession( portName ); } );
 
         item->setSizeHint( row->sizeHint() );
         sessionList_->setItemWidget( item, row );
@@ -453,8 +428,8 @@ void SidebarWidget::updateUiState()
 {
     const auto name = currentPortName();
     const bool hasPort = !name.isEmpty();
-    const bool isActive = hasPort && portWidget_->isSessionActive( name );
-    const int activeCount = portWidget_->activeSessionCount();
+    const bool isActive = hasPort && sessions_->isSessionActive( name );
+    const int activeCount = sessions_->activeSessionCount();
 
     startButton_->setEnabled( hasPort && !isActive );
     stopButton_->setEnabled( isActive );

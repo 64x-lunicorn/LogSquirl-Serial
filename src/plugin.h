@@ -22,7 +22,7 @@
  * @brief Global plugin state shared across all translation units.
  *
  * This header centralises the host API pointer, the opaque handle, and
- * the dialog instance.  It is the single source of truth for "is the
+ * the sessions and the views of them.  It is the single source of truth for "is the
  * plugin initialised?" and "what is running?".
  *
  * DESIGN NOTE — why globals and not a class?
@@ -44,6 +44,7 @@
 
 namespace serial_monitor {
 class PortWidget;
+class Sessions;
 class SidebarWidget;
 } // namespace serial_monitor
 
@@ -59,6 +60,7 @@ namespace serial_monitor {
 struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
+    Sessions* sessions = nullptr;           ///< The running captures, which the views show.
     PortWidget* dialog = nullptr;           ///< Serial session dialog.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for session control.
     bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.

@@ -37,11 +37,13 @@
  * Multiple ports can be captured simultaneously — each gets its own
  * SerialProcess, temp file, and LogSquirl tab.
  *
+ * The dialog is a view of the Sessions (sessions.h), which run the
+ * captures: it calls them, and updates on their signals.
+ *
  * OWNERSHIP
  * ─────────
- * The dialog is created by the menu action callback and deleted by
- * logsquirl_plugin_shutdown().  Active SerialProcess instances are
- * children of the PortWidget and are cleaned up automatically.
+ * The dialog is created by logsquirl_plugin_init() and deleted by
+ * logsquirl_plugin_shutdown(), before the Sessions it shows.
  */
 
 #pragma once
@@ -53,109 +55,31 @@
 #include <QDialog>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMap>
 #include <QPushButton>
 
 namespace serial_monitor {
 
+class Sessions;
+
 /**
  * Non-modal dialog for managing serial port capture sessions.
  *
- * When the user clicks "Start", a SerialProcess is created for the
- * selected port and the resulting temp file is opened in LogSquirl
- * via the host API.
+ * When the user clicks "Start", the Sessions start a capture for the
+ * selected port, which opens in a LogSquirl tab.
  */
 class PortWidget : public QDialog {
     Q_OBJECT
 
 public:
-    explicit PortWidget( QWidget* parent = nullptr );
+    /**
+     * @param sessions  The captures the dialog shows and controls.  Must
+     *                  outlive the dialog.
+     */
+    explicit PortWidget( Sessions* sessions, QWidget* parent = nullptr );
     ~PortWidget() override = default;
-
-    /**
-     * Stop all active serial sessions.
-     *
-     * Their temporary log files are kept for the tabs that show them, also
-     * when the plugin is disabled or updated at runtime.  The plugin removes
-     * them when LogSquirl quits (see tempdirs.h).
-     */
-    void stopAll();
-
-    /** Number of currently running sessions. */
-    int activeSessionCount() const;
-
-    /** Return the port names of all currently active sessions. */
-    QStringList activePorts() const;
-
-    /**
-     * Rotate the log for an active session: the old temp file is preserved
-     * (tab stays open), a new temp file is created, and a new tab opens.
-     *
-     * @param portName  Port name of the session to rotate.
-     */
-    void rotateSession( const QString& portName );
-
-    /**
-     * Start capture for a specific port.
-     *
-     * @param config    Serial port configuration.
-     * @param savePath  Optional path to a .log file for persistent saving.
-     *                  Refused if another active session writes to it.
-     * @return true if the session started successfully, false otherwise.
-     */
-    bool startSession( const SerialConfig& config, const QString& savePath = {} );
-
-    /**
-     * Stop capture for a specific port.
-     *
-     * @param portName  Port name of the session to stop.
-     */
-    void stopSession( const QString& portName );
-
-    /**
-     * Return the current line count for an active session.
-     *
-     * @param portName  Port name to query.
-     * @return Line count, or 0 if the session is not active.
-     */
-    qint64 sessionLineCount( const QString& portName ) const;
-
-    /**
-     * Check whether a session is currently running for the given port.
-     */
-    bool isSessionActive( const QString& portName ) const;
-
-    /**
-     * Send data to an active serial session.
-     *
-     * @param portName     Port name of the target session.
-     * @param data         Raw bytes to send.
-     * @param lineEnding   Line ending to append before transmission.
-     * @return true if sent successfully, false otherwise.
-     */
-    bool sendToSession( const QString& portName, const QByteArray& data, TxLineEnding lineEnding );
 
     /** Set the serial settings to the saved defaults (baud rate, timestamps). */
     void loadDefaults();
-
-    /** Names of the ports found by the most recent scan. */
-    const QStringList& ports() const
-    {
-        return ports_;
-    }
-
-public Q_SLOTS:
-    /**
-     * Re-scan for serial ports.  The enumeration blocks, so it only runs
-     * when asked for (Refresh, a session ending) and at construction, not
-     * on every start and stop; portsChanged() is emitted when ports() is
-     * updated.
-     */
-    void refreshPorts();
-
-Q_SIGNALS:
-    /** Emitted when a port scan has finished and ports() is updated. */
-    void portsChanged();
 
 private Q_SLOTS:
     /** Start capture for the currently selected port. */
@@ -173,48 +97,20 @@ private Q_SLOTS:
     /** Send the contents of the send input to the active session. */
     void sendCapture();
 
-    /** Handle a session ending (cleanup bookkeeping). */
-    void onSessionFinished( const QString& portName );
-
-    /** Handle a session error. */
-    void onSessionError( const QString& portName, const QString& message );
-
-    /** Rotate a session whose log file reached its size limit. */
-    void onSizeLimitReached( const QString& portName );
+    /** Refill the port combo box from the ports, marking active sessions. */
+    void updatePortCombo();
 
 private:
     /** Update UI state (button enable/disable, status label). */
     void updateUiState();
 
-    /**
-     * Rotate @p portName's log, open the new file in a tab and tell the
-     * user @p notification; a failure is reported by the session.
-     */
-    void rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
-                      const QString& notification );
-
-    /** Refill the port combo box from ports(), marking active sessions. */
-    void updatePortCombo();
-
-    /** Store the result of a scan and announce it. */
-    void setPorts( const QStringList& ports );
-
     /** Return the port name of the currently selected entry, or empty. */
     QString currentPortName() const;
 
-    /**
-     * Remove the session for @p portName from the active sessions and cut
-     * its signals to this widget.  The caller stops and deletes it.
-     *
-     * @return The session, or nullptr if there is none for @p portName.
-     */
-    SerialProcess* takeSession( const QString& portName );
-
-    /** Whether an active session writes to the file at @p path. */
-    bool isFileInUse( const QString& path ) const;
-
     /** Build a SerialConfig from the current UI selections. */
     SerialConfig buildConfig() const;
+
+    Sessions* sessions_ = nullptr; ///< The captures shown; not owned.
 
     // ── UI elements ──────────────────────────────────────────────────
     QComboBox* portCombo_ = nullptr;
@@ -245,11 +141,6 @@ private:
 
     // Status
     QLabel* statusLabel_ = nullptr;
-
-    // ── Active sessions (portName → SerialProcess*) ─────────────────
-    QStringList ports_; ///< Result of the last port scan.
-
-    QMap<QString, SerialProcess*> sessions_;
 };
 
 } // namespace serial_monitor

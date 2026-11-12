@@ -28,9 +28,9 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
-#include "portwidget.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
+#include "sessions.h"
 #include "sidebarwidget.h"
 
 #include <QDir>
@@ -38,9 +38,10 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QTimer>
 
-using serial_monitor::PortWidget;
 using serial_monitor::SerialConfig;
+using serial_monitor::Sessions;
 using serial_monitor::SidebarWidget;
 using serial_test::FakeHost;
 
@@ -51,12 +52,12 @@ SCENARIO( "a command is only sent to the selected port", "[sidebarwidget]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        PortWidget portWidget;
-        SidebarWidget sidebar( &portWidget );
+        Sessions sessions;
+        SidebarWidget sidebar( &sessions );
 
         SerialConfig cfg;
         cfg.portName = device.devicePath();
-        REQUIRE( portWidget.startSession( cfg ) );
+        REQUIRE( sessions.startSession( cfg ) );
         host.notifications.clear();
 
         QLineEdit* sendEdit = nullptr;
@@ -85,7 +86,7 @@ SCENARIO( "a command is only sent to the selected port", "[sidebarwidget]" )
             }
         }
 
-        portWidget.stopAll();
+        sessions.stopAll();
     }
 }
 
@@ -107,28 +108,28 @@ QStringList shownSessions( const SidebarWidget& sidebar )
 
 } // namespace
 
-SCENARIO( "the session list shows the ports that really capture", "[sidebarwidget]" )
+SCENARIO( "the session list shows the ports that really capture", "[sidebarwidget][signals]" )
 {
     GIVEN( "a capture the sidebar lists" )
     {
         FakeHost host;
         serial_test::PseudoTerminal first;
         serial_test::PseudoTerminal second;
-        PortWidget portWidget;
-        SidebarWidget sidebar( &portWidget );
+        Sessions sessions;
+        SidebarWidget sidebar( &sessions );
 
+        // Started through the sessions, as by the dialog: the sidebar
+        // learns of it from their signal, at once.
         SerialConfig cfg;
         cfg.portName = first.devicePath();
-        REQUIRE( portWidget.startSession( cfg ) );
-        QMetaObject::invokeMethod( &sidebar, "refreshSessionList" );
+        REQUIRE( sessions.startSession( cfg ) );
         REQUIRE( shownSessions( sidebar ) == QStringList{ first.devicePath() } );
 
-        WHEN( "it ends and another starts before the next refresh" )
+        WHEN( "it ends and another starts" )
         {
-            portWidget.stopSession( first.devicePath() );
+            sessions.stopSession( first.devicePath() );
             cfg.portName = second.devicePath();
-            REQUIRE( portWidget.startSession( cfg ) );
-            QMetaObject::invokeMethod( &sidebar, "refreshSessionList" );
+            REQUIRE( sessions.startSession( cfg ) );
 
             THEN( "the list shows the new port, not the ended one" )
             {
@@ -136,22 +137,52 @@ SCENARIO( "the session list shows the ports that really capture", "[sidebarwidge
             }
         }
 
-        portWidget.stopAll();
+        WHEN( "it ends on its own, its device unplugged" )
+        {
+            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
+            REQUIRE( session );
+            QMetaObject::invokeMethod(
+                session, "onPortError",
+                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+
+            THEN( "the list no longer shows it" )
+            {
+                REQUIRE( serial_test::waitFor(
+                    [ &sidebar ]() { return shownSessions( sidebar ).isEmpty(); } ) );
+            }
+        }
+
+        sessions.stopAll();
     }
 }
 #endif
 
-SCENARIO( "the sidebar shares the dialog's port list", "[sidebarwidget]" )
+SCENARIO( "the sidebar does not poll the sessions", "[sidebarwidget][signals]" )
 {
-    GIVEN( "a port widget that has scanned the ports" )
+    GIVEN( "a sidebar over the sessions" )
     {
         FakeHost host;
-        PortWidget portWidget;
+        Sessions sessions;
+        SidebarWidget sidebar( &sessions );
+
+        THEN( "it runs no timer: it updates on the sessions' signals" )
+        {
+            REQUIRE( sidebar.findChildren<QTimer*>().isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "the sidebar shares the dialog's port list", "[sidebarwidget]" )
+{
+    GIVEN( "sessions that have scanned the ports" )
+    {
+        FakeHost host;
+        Sessions sessions;
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
 
         WHEN( "the sidebar is created" )
         {
-            SidebarWidget sidebar( &portWidget );
+            SidebarWidget sidebar( &sessions );
 
             THEN( "it does not enumerate the ports again" )
             {
@@ -178,11 +209,11 @@ SCENARIO( "the empty log directory says where captures go", "[sidebarwidget]" )
     GIVEN( "a host with a configuration directory" )
     {
         FakeHost host;
-        PortWidget portWidget;
+        Sessions sessions;
 
         WHEN( "the sidebar is created" )
         {
-            SidebarWidget sidebar( &portWidget );
+            SidebarWidget sidebar( &sessions );
             auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
             REQUIRE( logDir );
 
@@ -200,11 +231,11 @@ SCENARIO( "the empty log directory says where captures go", "[sidebarwidget]" )
     {
         FakeHost host;
         host.hasConfigDir = false;
-        PortWidget portWidget;
+        Sessions sessions;
 
         WHEN( "the sidebar is created" )
         {
-            SidebarWidget sidebar( &portWidget );
+            SidebarWidget sidebar( &sessions );
             auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
             REQUIRE( logDir );
 
@@ -227,8 +258,8 @@ SCENARIO( "a log directory that cannot be saved is reported", "[sidebarwidget]" 
         }
 
         FakeHost host;
-        PortWidget portWidget;
-        SidebarWidget sidebar( &portWidget );
+        Sessions sessions;
+        SidebarWidget sidebar( &sessions );
         auto* logDir = sidebar.findChild<QLineEdit*>( "logDir" );
         REQUIRE( logDir );
         host.notifications.clear();

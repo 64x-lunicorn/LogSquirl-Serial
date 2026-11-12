@@ -31,6 +31,7 @@
 #include "baudrate.h"
 #include "fakehost.h"
 #include "portwidget.h"
+#include "sessions.h"
 #include "sidebarwidget.h"
 
 #include <QComboBox>
@@ -44,6 +45,7 @@ using serial_monitor::initBaudRateCombo;
 using serial_monitor::PortWidget;
 using serial_monitor::selectBaudRate;
 using serial_monitor::SerialConfig;
+using serial_monitor::Sessions;
 using serial_monitor::SidebarWidget;
 using serial_test::FakeHost;
 
@@ -198,8 +200,9 @@ SCENARIO( "a custom default baud rate is applied to the dialog and sidebar", "[b
 
         WHEN( "the dialog and sidebar are created" )
         {
-            PortWidget portWidget;
-            SidebarWidget sidebar( &portWidget );
+            Sessions sessions;
+            PortWidget portWidget( &sessions );
+            SidebarWidget sidebar( &sessions );
 
             THEN( "both select the configured rate" )
             {
@@ -221,19 +224,19 @@ SCENARIO( "a session with an invalid baud rate is refused", "[baudrate]" )
     GIVEN( "a configuration without a usable baud rate" )
     {
         FakeHost host;
-        PortWidget widget;
+        Sessions sessions;
         SerialConfig cfg;
         cfg.portName = "logsquirl-test-port";
         cfg.baudRate = 0;
 
         WHEN( "starting a session" )
         {
-            const auto started = widget.startSession( cfg );
+            const auto started = sessions.startSession( cfg );
 
             THEN( "it is rejected with a notification" )
             {
                 REQUIRE_FALSE( started );
-                REQUIRE( widget.activeSessionCount() == 0 );
+                REQUIRE( sessions.activeSessionCount() == 0 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "baud rate" ) );
             }

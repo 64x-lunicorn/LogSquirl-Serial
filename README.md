@@ -179,41 +179,54 @@ graph TD
     subgraph Plugin — C ABI Boundary
         P[plugin.cpp<br/>get_info / init /<br/>shutdown / configure]
         SW[SidebarWidget<br/>port selector + session list]
-        PW[PortWidget<br/>session management]
+        PW[PortWidget<br/>dialog]
+        S[Sessions<br/>session management]
         SP1[SerialProcess #1<br/>/dev/ttyUSB0]
         SP2[SerialProcess #2<br/>COM3]
     end
 
     H -- register_sidebar_tab --> P
+    P -- creates --> S
     P -- creates --> SW
-    SW -- uses --> PW
+    P -- creates --> PW
+    SW -- view of --> S
+    PW -- view of --> S
     SW --> SB
-    PW -- manages --> SP1
-    PW -- manages --> SP2
+    S -- manages --> SP1
+    S -- manages --> SP2
     SP1 -- writes --> TF1[Temp File #1]
     SP2 -- writes --> TF2[Temp File #2]
     TF1 -- open_file follow=1 --> H
     TF2 -- open_file follow=1 --> H
 ```
 
+`Sessions` (`src/sessions.h`) runs the captures and keeps the port list; the
+sidebar and the dialog are only views of it. They call it, and update on its
+signals — `sessionStarted`, `sessionStopped`, `sessionChanged` (rotated) and
+`portsChanged` — whichever view started a session, or when one ends on its
+own. A running session's counters (lines, bytes received, file size,
+rotations, size of the next rotation, start time) are read from
+`Sessions::session(port)`.
+
 ### Data Flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant PW as PortWidget
+    participant SW as SidebarWidget
+    participant S as Sessions
     participant SP as SerialProcess
     participant Port as QSerialPort
     participant TF as Temp File
     participant LS as LogSquirl Tab
 
     User->>SW: Click Start
-    SW->>PW: startSession(config)
-    PW->>SP: start()
-    SP->>Port: open(ReadOnly)
+    SW->>S: startSession(config)
+    S->>SP: start()
+    SP->>Port: open(ReadWrite)
     SP->>TF: create temp file
-    SP-->>PW: open_file(tempPath, follow=1)
-    PW-->>LS: New tab opens
+    S-->>LS: open_file(tempPath, follow=1): new tab opens
+    S-->>SW: sessionStarted(port)
     loop Streaming
         Port->>SP: readyRead signal
         SP->>SP: optional timestamp prefix
@@ -221,9 +234,10 @@ sequenceDiagram
         LS->>TF: tail/follow reads
     end
     User->>SW: Click Stop
-    SW->>PW: stopSession(portName)
-    PW->>SP: preserveTempFile() + stop()
+    SW->>S: stopSession(portName)
+    S->>SP: stop() + preserveTempFile()
     SP->>Port: close()
+    S-->>SW: sessionStopped(port)
     Note over LS: Tab stays open with captured output
 ```
 
@@ -257,7 +271,9 @@ logsquirl-serial/
 │   ├── plugin.cpp              # C ABI entry points (get_info, init, shutdown)
 │   ├── serialprocess.h         # Serial port discovery + per-port session wrapper
 │   ├── serialprocess.cpp
-│   ├── portwidget.h            # Session management (start/stop/rotate)
+│   ├── sessions.h              # Session management (start/stop/rotate), port list
+│   ├── sessions.cpp
+│   ├── portwidget.h            # Serial Monitor dialog, a view of the sessions
 │   ├── portwidget.cpp
 │   ├── sidebarwidget.h         # LogSquirl sidebar tab (port list + controls)
 │   ├── sidebarwidget.cpp
@@ -306,7 +322,7 @@ building your own plugins.
 2. Rename the library in `CMakeLists.txt`
 3. Update `plugin.json` with your plugin's identity
 4. Modify `plugin.cpp` entry points
-5. Replace `SerialProcess` + `PortWidget` with your own logic
+5. Replace `SerialProcess` + `Sessions` with your own logic
 6. Build and install
 
 ## License

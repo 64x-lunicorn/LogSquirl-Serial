@@ -332,6 +332,8 @@ bool SerialProcess::start()
     nextRotationAt_ = config_.maxFileBytes;
 
     lineCount_ = 0;
+    totalLineCount_ = 0;
+    receivedBytes_ = 0;
     readBuffer_.clear();
     readAfterCr_ = false;
     portFailed_ = false;
@@ -351,6 +353,7 @@ bool SerialProcess::start()
         discardLogFile();
         return false;
     }
+    startTime_ = QDateTime::currentDateTime();
 
     hostLog( LOGSQUIRL_LOG_INFO,
              QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
@@ -535,6 +538,7 @@ bool SerialProcess::writeLine( const QByteArray& line )
         return false;
     }
     ++lineCount_;
+    ++totalLineCount_;
     fileBytes_ += record.size();
     // A rotation that fails keeps the capture in this file: it is asked for
     // again once the file has grown by the limit once more, as asking on
@@ -668,7 +672,9 @@ void SerialProcess::flushPartialLine()
 
 void SerialProcess::onReadyRead()
 {
-    readBuffer_.append( port_.readAll() );
+    const auto data = port_.readAll();
+    receivedBytes_ += data.size();
+    readBuffer_.append( data );
 
     const auto lines = takeLines( readBuffer_, readAfterCr_ );
     for ( const auto& line : lines ) {

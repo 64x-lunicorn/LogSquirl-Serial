@@ -35,6 +35,7 @@
 #include "portwidget.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
+#include "sessions.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -297,7 +298,7 @@ SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
         const auto* api = serial_monitor::g_state.api;
         auto* handle = serial_monitor::g_state.handle;
         REQUIRE( logsquirl_plugin_init( api, handle ) == 0 );
-        auto* widget = serial_monitor::g_state.dialog;
+        auto* widget = serial_monitor::g_state.sessions;
         REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ) ) );
         widget->stopSession( firstDevice.devicePath() );
         REQUIRE( widget->startSession( configFor( secondDevice.devicePath() ) ) );
@@ -330,7 +331,7 @@ SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
             {
                 host.openedFiles.clear();
                 REQUIRE( logsquirl_plugin_init( api, handle ) == 0 );
-                REQUIRE( serial_monitor::g_state.dialog->startSession(
+                REQUIRE( serial_monitor::g_state.sessions->startSession(
                     configFor( firstDevice.devicePath() ) ) );
                 const auto newDir = dirOf( host.openedFiles.first() );
                 logsquirl_plugin_shutdown();
@@ -381,7 +382,7 @@ SCENARIO( "save paths are never removed", "[plugin]" )
         REQUIRE(
             logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
             == 0 );
-        auto* widget = serial_monitor::g_state.dialog;
+        auto* widget = serial_monitor::g_state.sessions;
         const auto logDir = host.tempRoot() + "/logs";
         REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ),
                                        logDir + "/stopped.log" ) );
@@ -512,6 +513,7 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
                     REQUIRE( host.sidebarTabs.isEmpty() );
                     REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
                     REQUIRE( serial_monitor::g_state.dialog == nullptr );
+                    REQUIRE( serial_monitor::g_state.sessions == nullptr );
                     REQUIRE_FALSE( serial_monitor::g_state.initialised );
                 }
             }
@@ -541,6 +543,7 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
                 REQUIRE( rc != 0 );
                 REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
                 REQUIRE( serial_monitor::g_state.dialog == nullptr );
+                REQUIRE( serial_monitor::g_state.sessions == nullptr );
                 REQUIRE_FALSE( host.logs.filter( "no room for another tab" ).isEmpty() );
             }
         }
@@ -565,6 +568,7 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
                 REQUIRE( host.sidebarTabs.isEmpty() );
                 REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
                 REQUIRE( serial_monitor::g_state.dialog == nullptr );
+                REQUIRE( serial_monitor::g_state.sessions == nullptr );
             }
         }
 
@@ -586,6 +590,7 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
                 REQUIRE( host.sidebarTabs.isEmpty() );
                 REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
                 REQUIRE( serial_monitor::g_state.dialog == nullptr );
+                REQUIRE( serial_monitor::g_state.sessions == nullptr );
                 REQUIRE_FALSE( serial_monitor::g_state.initialised );
             }
         }

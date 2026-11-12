@@ -19,551 +19,97 @@
 
 /**
  * @file portwidget_test.cpp
- * @brief BDD tests for the session bookkeeping in PortWidget.
+ * @brief BDD tests for the Serial Monitor dialog, a view of the Sessions.
  *
- * PortWidget owns the running SerialProcess sessions for both the dialog
- * and the sidebar.  These tests drive it through its public API with a
- * FakeHost and, on Unix, a pseudo-terminal as the device (see
- * pseudoterminal.h).
+ * The sessions themselves are tested in sessions_test.cpp.  The dialog
+ * lists the system's serial ports, so a pseudo-terminal used as the device
+ * (see pseudoterminal.h) is never the selected port: these tests look at
+ * what the dialog shows of all sessions.
  */
 
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
-#include "filesizelimit.h"
 #include "portwidget.h"
 #include "pseudoterminal.h"
-#include "readonlydir.h"
+#include "sessions.h"
 
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QTemporaryDir>
+#include <QLabel>
 
 using serial_monitor::PortWidget;
 using serial_monitor::SerialConfig;
+using serial_monitor::Sessions;
 using serial_test::FakeHost;
-using serial_test::waitFor;
 
 namespace {
 
-SerialConfig configFor( const QString& portName )
+/// The dialog's status line, which counts the active sessions.
+QString statusOf( const PortWidget& dialog )
 {
-    SerialConfig cfg;
-    cfg.portName = portName;
-    return cfg;
+    for ( const auto* label : dialog.findChildren<QLabel*>() ) {
+        if ( label->text().contains( "session" ) ) {
+            return label->text();
+        }
+    }
+    return {};
 }
 
 } // namespace
 
-SCENARIO( "a session is only accepted when its port opens", "[portwidget]" )
+SCENARIO( "the dialog shares the sessions' port list", "[portwidget]" )
 {
-    GIVEN( "a port that does not exist" )
+    GIVEN( "sessions that have scanned the ports" )
     {
         FakeHost host;
-        PortWidget widget;
-        QTemporaryDir logDir;
-        const QString port = "logsquirl-test-no-such-port";
-
-        WHEN( "starting a session with a save path" )
-        {
-            const auto started
-                = widget.startSession( configFor( port ), logDir.filePath( "capture.log" ) );
-
-            THEN( "the session is rejected" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE( widget.activeSessionCount() == 0 );
-                REQUIRE_FALSE( widget.isSessionActive( port ) );
-            }
-
-            THEN( "no tab is opened and no empty file is left behind" )
-            {
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE( QDir( logDir.path() ).isEmpty() );
-            }
-
-            THEN( "the user is told once why" )
-            {
-                REQUIRE( host.notifications.size() == 1 );
-            }
-        }
-    }
-
-    GIVEN( "a save path that is not a full path" )
-    {
-        FakeHost host;
-        PortWidget widget;
-        const QString port = "logsquirl-test-no-such-port";
-
-        WHEN( "starting a session with it" )
-        {
-            const auto started = widget.startSession( configFor( port ), "relative-capture.log" );
-
-            THEN( "the session is rejected before anything is written, and the user told why" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "not a full path" ) );
-            }
-        }
-    }
-
-#ifdef Q_OS_UNIX
-    GIVEN( "a device and a save path in the home directory, spelled with ~" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        QTemporaryDir home;
-        const auto oldHome = qgetenv( "HOME" );
-        qputenv( "HOME", QFile::encodeName( home.path() ) );
-
-        WHEN( "starting a session" )
-        {
-            const auto started
-                = widget.startSession( configFor( device.devicePath() ), "~/serial/capture.log" );
-            qputenv( "HOME", oldHome );
-            widget.stopAll();
-
-            THEN( "the capture goes to the home directory, and the tab opens its full path" )
-            {
-                const auto expected = QDir( home.path() ).filePath( "serial/capture.log" );
-                REQUIRE( started );
-                REQUIRE( QFileInfo::exists( expected ) );
-                REQUIRE( host.openedFiles == QStringList{ expected } );
-            }
-        }
-
-        qputenv( "HOME", oldHome );
-    }
-
-    GIVEN( "a device on a working port" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        QTemporaryDir logDir;
-
-        WHEN( "starting a session" )
-        {
-            const auto started = widget.startSession( configFor( device.devicePath() ),
-                                                      logDir.filePath( "capture.log" ) );
-
-            THEN( "the session is accepted and its file opened in a tab" )
-            {
-                REQUIRE( started );
-                REQUIRE( widget.isSessionActive( device.devicePath() ) );
-                REQUIRE( host.openedFiles.size() == 1 );
-            }
-
-            widget.stopAll();
-        }
-    }
-#endif
-}
-
-#ifdef Q_OS_UNIX
-SCENARIO( "two sessions never write to the same file", "[portwidget]" )
-{
-    GIVEN( "a session writing to a save path" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal firstDevice;
-        serial_test::PseudoTerminal secondDevice;
-        PortWidget widget;
-        QTemporaryDir logDir;
-        const auto savePath = logDir.filePath( "capture.log" );
-        REQUIRE( widget.startSession( configFor( firstDevice.devicePath() ), savePath ) );
-        host.notifications.clear();
-
-        WHEN( "starting a second port with the same save path" )
-        {
-            const auto started
-                = widget.startSession( configFor( secondDevice.devicePath() ), savePath );
-
-            THEN( "the second session is refused, and the user told why" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE_FALSE( widget.isSessionActive( secondDevice.devicePath() ) );
-                REQUIRE( host.notifications.size() == 1 );
-            }
-        }
-
-        widget.stopAll();
-    }
-
-    GIVEN( "a session whose save file has been deleted while it runs" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal firstDevice;
-        serial_test::PseudoTerminal secondDevice;
-        PortWidget widget;
-        QTemporaryDir logDir;
-        const auto savePath = logDir.filePath( "capture.log" );
-        REQUIRE( widget.startSession( configFor( firstDevice.devicePath() ), savePath ) );
-        REQUIRE( QFile::remove( savePath ) );
-
-        WHEN( "starting a second port with a different, new save path" )
-        {
-            const auto started = widget.startSession( configFor( secondDevice.devicePath() ),
-                                                      logDir.filePath( "other.log" ) );
-
-            THEN( "it is accepted: two missing files are not the same file" )
-            {
-                REQUIRE( started );
-                REQUIRE( widget.isSessionActive( secondDevice.devicePath() ) );
-            }
-        }
-
-        WHEN( "starting a second port with the same save path, spelled differently" )
-        {
-            const auto started = widget.startSession( configFor( secondDevice.devicePath() ),
-                                                      logDir.path() + "/sub/../capture.log" );
-
-            THEN( "it is still refused" )
-            {
-                REQUIRE_FALSE( started );
-            }
-        }
-
-        widget.stopAll();
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-SCENARIO( "a failed rotation is reported once", "[portwidget]" )
-{
-    GIVEN( "a session whose log directory no longer accepts new files" )
-    {
-        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
-            WARN( "File permissions are not enforced (running as root?); skipped." );
-            return;
-        }
-
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        QTemporaryDir logDir;
-        REQUIRE( widget.startSession( configFor( device.devicePath() ),
-                                      logDir.filePath( "capture.log" ) ) );
-        host.notifications.clear();
-        host.openedFiles.clear();
-
-        WHEN( "rotating the session" )
-        {
-            {
-                const serial_test::ReadOnlyDir readOnly( logDir.path() );
-                widget.rotateSession( device.devicePath() );
-            }
-
-            THEN( "the user is told once, no tab is opened, and the session goes on" )
-            {
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE( widget.isSessionActive( device.devicePath() ) );
-            }
-        }
-
-        widget.stopAll();
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-SCENARIO( "a capture that reaches its size limit goes on in a new tab", "[portwidget]" )
-{
-    GIVEN( "a session whose log file may hold 16 bytes" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 16;
-        cfg.timestamps = false; // keep the file content predictable
-        REQUIRE( widget.startSession( cfg ) );
-        const auto firstFile = host.openedFiles.value( 0 );
-        host.notifications.clear();
-
-        WHEN( "the device sends more than that" )
-        {
-            REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
-            const bool rotated = waitFor( [ &host ]() { return host.openedFiles.size() == 2; } );
-
-            THEN( "the capture goes on in a new file, opened in a new tab" )
-            {
-                REQUIRE( rotated );
-                REQUIRE( host.openedFiles.at( 1 ) != firstFile );
-                REQUIRE( widget.isSessionActive( device.devicePath() ) );
-            }
-
-            THEN( "the user is told why, and the old file keeps its lines" )
-            {
-                REQUIRE( rotated );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "size limit" ) );
-                QFile old( firstFile );
-                REQUIRE( old.open( QIODevice::ReadOnly ) );
-                REQUIRE( old.readAll() == "0123456789\nabcdefghij\n" );
-            }
-        }
-
-        widget.stopAll();
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-SCENARIO( "stopAll keeps temporary log files for their tabs", "[portwidget]" )
-{
-    GIVEN( "a session writing to a temporary file" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        auto* widget = new PortWidget;
-        REQUIRE( widget->startSession( configFor( device.devicePath() ) ) );
-        REQUIRE( host.openedFiles.size() == 1 );
-        const auto tempFile = host.openedFiles.first();
+        Sessions sessions;
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
 
-        WHEN( "the user stops all sessions: stopAll(), then the widget is deleted" )
+        WHEN( "the dialog is created" )
         {
-            widget->stopAll();
-            const auto scansDuringStop = host.logs.filter( "Discovered" ).size() - scansBefore;
-            delete widget;
+            PortWidget dialog( &sessions );
 
-            THEN( "the temporary file is kept for its tab" )
-            {
-                REQUIRE( QFileInfo::exists( tempFile ) );
-            }
-
-            THEN( "the ports are not scanned again for the stopped session" )
-            {
-                REQUIRE( scansDuringStop == 0 );
-            }
-        }
-    }
-
-    GIVEN( "a session writing to a temporary file that has been rotated" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        auto* widget = new PortWidget;
-        REQUIRE( widget->startSession( configFor( device.devicePath() ) ) );
-        widget->rotateSession( device.devicePath() );
-        REQUIRE( host.openedFiles.size() == 2 );
-        REQUIRE( QFileInfo( host.openedFiles.last() ).absolutePath()
-                 == QFileInfo( host.openedFiles.first() ).absolutePath() );
-
-        WHEN( "the user stops all sessions: stopAll(), then the widget is deleted" )
-        {
-            widget->stopAll();
-            delete widget;
-
-            THEN( "the files of both tabs are kept" )
-            {
-                REQUIRE( QFileInfo::exists( host.openedFiles.first() ) );
-                REQUIRE( QFileInfo::exists( host.openedFiles.last() ) );
-            }
-        }
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-// A pseudo-terminal cannot be unplugged: QSerialPort does not notice when
-// its other side closes.  A real USB adapter that is pulled makes the port
-// report QSerialPort::ResourceError, so the test delivers that error to
-// the session's handler directly.
-SCENARIO( "an unplugged device ends its session", "[portwidget]" )
-{
-    GIVEN( "a running session" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
-        auto* session = widget.findChild<serial_monitor::SerialProcess*>();
-        REQUIRE( session );
-        host.notifications.clear();
-
-        WHEN( "the port reports that the device is gone, twice" )
-        {
-            for ( int i = 0; i < 2; ++i ) {
-                QMetaObject::invokeMethod(
-                    session, "onPortError",
-                    Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
-            }
-
-            THEN( "the session is removed" )
-            {
-                REQUIRE( waitFor( [ &widget, &device ]() {
-                    return !widget.isSessionActive( device.devicePath() );
-                } ) );
-            }
-
-            THEN( "the user is told once that the device was disconnected" )
-            {
-                serial_test::processEventsFor( 100 );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "disconnected" ) );
-            }
-        }
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-// Some drivers report a pulled adapter, or a failure of their own, as a
-// ReadError or an UnknownError rather than a ResourceError (Windows
-// USB-serial drivers among them); the read notifier then fires on every
-// pass of the event loop.
-SCENARIO( "any error of an open port ends its session, with one notification", "[portwidget]" )
-{
-    GIVEN( "a running session" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
-        auto* session = widget.findChild<serial_monitor::SerialProcess*>();
-        REQUIRE( session );
-        host.notifications.clear();
-        const auto reportError = [ session ]( QSerialPort::SerialPortError error ) {
-            QMetaObject::invokeMethod( session, "onPortError",
-                                       Q_ARG( QSerialPort::SerialPortError, error ) );
-        };
-
-        WHEN( "the port reports a ReadError, again and again, then an UnknownError" )
-        {
-            for ( int i = 0; i < 5; ++i ) {
-                reportError( QSerialPort::ReadError );
-            }
-            reportError( QSerialPort::UnknownError );
-
-            THEN( "the session is removed, and the user is told once" )
-            {
-                REQUIRE( waitFor( [ &widget, &device ]() {
-                    return !widget.isSessionActive( device.devicePath() );
-                } ) );
-                serial_test::processEventsFor( 100 );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "capture stopped" ) );
-            }
-        }
-
-        WHEN( "the port reports an UnknownError" )
-        {
-            reportError( QSerialPort::UnknownError );
-
-            THEN( "the session is removed" )
-            {
-                REQUIRE( waitFor( [ &widget, &device ]() {
-                    return !widget.isSessionActive( device.devicePath() );
-                } ) );
-            }
-        }
-
-        WHEN( "the port reports a timeout, which only a wait for data can cause" )
-        {
-            reportError( QSerialPort::TimeoutError );
-            serial_test::processEventsFor( 100 );
-
-            THEN( "the session goes on, and nothing is shown" )
-            {
-                REQUIRE( widget.isSessionActive( device.devicePath() ) );
-                REQUIRE( host.notifications.isEmpty() );
-            }
-        }
-
-        widget.stopAll();
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-SCENARIO( "a log file that cannot be written ends its session", "[portwidget]" )
-{
-    GIVEN( "a running session whose log file may grow by a few bytes only" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        QTemporaryDir logDir;
-        REQUIRE( widget.startSession( configFor( device.devicePath() ),
-                                      logDir.filePath( "capture.log" ) ) );
-        host.notifications.clear();
-        serial_test::FileSizeLimit limit( 8 );
-        REQUIRE( limit.isActive() );
-
-        WHEN( "the device sends more than that" )
-        {
-            REQUIRE( device.send( "first line\nsecond line\n" ) );
-            const bool removed = waitFor(
-                [ &widget, &device ]() { return !widget.isSessionActive( device.devicePath() ); } );
-            serial_test::processEventsFor( 100 );
-            limit.lift();
-
-            THEN( "the session is removed, and the user is told once why" )
-            {
-                REQUIRE( removed );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "Could not write the log file" ) );
-            }
-        }
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-SCENARIO( "starting and stopping a session does not rescan the ports", "[portwidget]" )
-{
-    GIVEN( "a port widget that has scanned the ports once" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        PortWidget widget;
-        const auto scansBefore = host.logs.filter( "Discovered" ).size();
-        REQUIRE( scansBefore == 1 );
-
-        WHEN( "a session is started and stopped" )
-        {
-            REQUIRE( widget.startSession( configFor( device.devicePath() ) ) );
-            widget.stopSession( device.devicePath() );
-
-            THEN( "the ports are not enumerated again" )
+            THEN( "it does not enumerate the ports again, and shows that nothing runs" )
             {
                 REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore );
+                REQUIRE( statusOf( dialog ) == "No active sessions" );
+            }
+        }
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "the dialog follows sessions it did not start", "[portwidget][signals]" )
+{
+    GIVEN( "a dialog over the sessions" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions;
+        PortWidget dialog( &sessions );
+        SerialConfig cfg;
+        cfg.portName = device.devicePath();
+
+        WHEN( "a session is started elsewhere, as from the sidebar" )
+        {
+            REQUIRE( sessions.startSession( cfg ) );
+
+            THEN( "the dialog counts it at once" )
+            {
+                REQUIRE( statusOf( dialog ) == "1 active session(s)" );
             }
 
-            QDir( QFileInfo( host.openedFiles.first() ).absolutePath() ).removeRecursively();
+            AND_WHEN( "it is stopped" )
+            {
+                sessions.stopSession( device.devicePath() );
+
+                THEN( "the dialog no longer counts it" )
+                {
+                    REQUIRE( statusOf( dialog ) == "No active sessions" );
+                }
+            }
+
+            sessions.stopAll();
         }
     }
 }
 #endif
-
-SCENARIO( "the port list is rescanned on request", "[portwidget]" )
-{
-    GIVEN( "a port widget" )
-    {
-        FakeHost host;
-        PortWidget widget;
-        int changes = 0;
-        QObject::connect( &widget, &PortWidget::portsChanged, [ &changes ]() { ++changes; } );
-        const auto scansBefore = host.logs.filter( "Discovered" ).size();
-
-        WHEN( "refreshing the ports" )
-        {
-            widget.refreshPorts();
-
-            THEN( "they are enumerated once and the change announced" )
-            {
-                REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore + 1 );
-                REQUIRE( changes == 1 );
-            }
-        }
-    }
-}

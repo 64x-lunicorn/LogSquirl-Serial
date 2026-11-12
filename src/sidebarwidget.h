@@ -31,8 +31,9 @@
  *     per-session Rotate / Stop buttons
  *   - A "Stop All" button
  *
- * The panel delegates session management to the PortWidget (which also
- * remains available as a standalone dialog via the Plugins menu).
+ * The panel is a view of the Sessions (sessions.h), as is the dialog
+ * still available via the Plugins menu: it calls them, and updates on
+ * their signals.
  */
 
 #pragma once
@@ -45,19 +46,17 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
-#include <QStringList>
-#include <QTimer>
 #include <QWidget>
 
 namespace serial_monitor {
 
-class PortWidget;
+class Sessions;
 
 /**
  * Sidebar panel widget for serial port session control.
  *
  * Embeds port selection, serial settings, and an active-sessions list.
- * All actual session logic is delegated to PortWidget.
+ * All actual session logic is in the Sessions.
  */
 class SidebarWidget : public QWidget {
     Q_OBJECT
@@ -66,20 +65,17 @@ public:
     /**
      * Construct the sidebar panel.
      *
-     * @param portWidget  Shared PortWidget that owns the sessions.
-     *                    Must outlive this widget.
-     * @param parent      QWidget parent.
+     * @param sessions  The captures the panel shows and controls.
+     *                  Must outlive this widget.
+     * @param parent    QWidget parent.
      */
-    explicit SidebarWidget( PortWidget* portWidget, QWidget* parent = nullptr );
+    explicit SidebarWidget( Sessions* sessions, QWidget* parent = nullptr );
 
     /** Set the serial settings to the saved defaults (baud rate, timestamps). */
     void loadDefaults();
 
 private Q_SLOTS:
-    /** Ask the PortWidget to re-scan for serial ports. */
-    void refreshPorts();
-
-    /** Refill the port combo box from the PortWidget's port list. */
+    /** Refill the port combo box and the session list from the Sessions. */
     void updatePortList();
 
     /** Start capture for the currently selected port. */
@@ -90,9 +86,6 @@ private Q_SLOTS:
 
     /** Stop all active sessions. */
     void stopAllCaptures();
-
-    /** Periodic refresh of the active-sessions list (line counts). */
-    void refreshSessionList();
 
     /** Send the contents of the send input to the active session. */
     void sendCommand();
@@ -120,7 +113,7 @@ private:
     void saveLogDir();
 
     // ── Shared state ─────────────────────────────────────────────────
-    PortWidget* portWidget_ = nullptr;
+    Sessions* sessions_ = nullptr; ///< The captures shown; not owned.
 
     // ── UI elements ──────────────────────────────────────────────────
     QComboBox* portCombo_ = nullptr;
@@ -151,11 +144,7 @@ private:
 
     // Sessions
     QListWidget* sessionList_ = nullptr;
-    QStringList shownSessions_; ///< The ports sessionList_ shows.
     QLabel* statusLabel_ = nullptr;
-
-    // Periodic refresh
-    QTimer* refreshTimer_ = nullptr;
 };
 
 } // namespace serial_monitor

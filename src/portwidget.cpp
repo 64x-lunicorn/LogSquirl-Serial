@@ -21,74 +21,31 @@
  * @file portwidget.cpp
  * @brief Implementation of the PortWidget dialog.
  *
- * ARCHITECTURE OVERVIEW
- * ─────────────────────
- * The dialog maintains a map of portName → SerialProcess*.  When the
- * user clicks "Start":
- *
- *   1. A SerialProcess is created with the configured parameters.
- *   2. SerialProcess::start() opens the serial port.
- *   3. Incoming data is streamed to a temporary file.
- *   4. The host API's open_file() is called with the temp file path
- *      and follow=true, which opens a new tail-mode tab in LogSquirl.
- *   5. The session entry is stored in sessions_.
- *
- * When the user clicks "Stop":
- *   1. SerialProcess::stop() closes the serial port.
- *   2. The session is removed from sessions_.
- *   3. The LogSquirl tab remains open (the user can close it manually).
- *
- * Multiple ports can run simultaneously — each with its own tab.
+ * The dialog is a view of the Sessions: its buttons call them ("Start"
+ * starts a capture of the selected port with the settings of the form,
+ * "Stop" stops it), and it refreshes its port list, its buttons and its
+ * status line on their signals, whichever view started or stopped a
+ * session, or when one ended on its own.
  */
 
 #include "portwidget.h"
 #include "baudrate.h"
 #include "plugin.h"
+#include "sessions.h"
 
-#include <QDir>
 #include <QFileDialog>
-#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QLocale>
-#include <QMessageBox>
 #include <QVBoxLayout>
 
 namespace serial_monitor {
 
-namespace {
-
-/**
- * Whether @p a and @p b name the same file.  Existing files are compared
- * by their canonical path (resolving symlinks); otherwise the cleaned
- * absolute paths are compared.  QFileInfo's own operator== cannot be
- * used: two files that do not exist both have an empty canonical path,
- * and compare equal.
- */
-bool isSameFile( const QString& a, const QString& b )
-{
-    const QFileInfo fileA( a );
-    const QFileInfo fileB( b );
-    if ( fileA.exists() && fileB.exists() ) {
-        return fileA.canonicalFilePath() == fileB.canonicalFilePath();
-    }
-#if defined( Q_OS_WIN ) || defined( Q_OS_MACOS )
-    constexpr auto sensitivity = Qt::CaseInsensitive;
-#else
-    constexpr auto sensitivity = Qt::CaseSensitive;
-#endif
-    return QDir::cleanPath( fileA.absoluteFilePath() )
-               .compare( QDir::cleanPath( fileB.absoluteFilePath() ), sensitivity )
-           == 0;
-}
-
-} // namespace
-
 // ── Construction ────────────────────────────────────────────────────────
 
-PortWidget::PortWidget( QWidget* parent )
+PortWidget::PortWidget( Sessions* sessions, QWidget* parent )
     : QDialog( parent )
+    , sessions_( sessions )
 {
     setWindowTitle( "Serial Monitor" );
     setMinimumWidth( 480 );
@@ -239,7 +196,7 @@ PortWidget::PortWidget( QWidget* parent )
     mainLayout->addStretch();
 
     // ── Connect signals ──────────────────────────────────────────────
-    connect( refreshButton_, &QPushButton::clicked, this, &PortWidget::refreshPorts );
+    connect( refreshButton_, &QPushButton::clicked, sessions_, &Sessions::refreshPorts );
     connect( startButton_, &QPushButton::clicked, this, &PortWidget::startCapture );
     connect( stopButton_, &QPushButton::clicked, this, &PortWidget::stopCapture );
     connect( stopAllButton_, &QPushButton::clicked, this, &PortWidget::stopAllCaptures );
@@ -250,198 +207,36 @@ PortWidget::PortWidget( QWidget* parent )
     connect( sendEdit_, &QLineEdit::returnPressed, this, &PortWidget::sendCapture );
     connect( portCombo_, &QComboBox::currentIndexChanged, this, [ this ]() { updateUiState(); } );
 
+    // Follow the sessions, whichever view starts or stops them
+    connect( sessions_, &Sessions::portsChanged, this, &PortWidget::updatePortCombo );
+    connect( sessions_, &Sessions::sessionStarted, this, &PortWidget::updatePortCombo );
+    connect( sessions_, &Sessions::sessionStopped, this, &PortWidget::updatePortCombo );
+
     // Load defaults from config
     loadDefaults();
 
-    // Initial port scan
-    refreshPorts();
-}
-
-// ── Public methods ──────────────────────────────────────────────────────
-
-void PortWidget::stopAll()
-{
-    const auto portNames = sessions_.keys();
-    for ( const auto& name : portNames ) {
-        auto* proc = takeSession( name );
-        proc->stop();
-        proc->preserveTempFile();
-        proc->deleteLater();
-    }
+    // The Sessions have scanned the ports already.
     updatePortCombo();
-}
-
-int PortWidget::activeSessionCount() const
-{
-    return sessions_.size();
-}
-
-QStringList PortWidget::activePorts() const
-{
-    return sessions_.keys();
-}
-
-void PortWidget::rotateSession( const QString& portName )
-{
-    rotateLogOf( portName, SerialProcess::PartialLine::WriteOut,
-                 QString( "New session started for %1" ).arg( portName ) );
-}
-
-void PortWidget::rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
-                              const QString& notification )
-{
-    auto* proc = sessions_.value( portName, nullptr );
-    if ( !proc || !proc->isRunning() ) {
-        return;
-    }
-
-    const auto newPath = proc->rotateLog( partialLine );
-    if ( newPath.isEmpty() ) {
-        // rotateLog() has reported why through errorOccurred()
-        return;
-    }
-
-    // The old tab keeps showing the old file, so the temporary directory
-    // must outlive this session (until LogSquirl quits, see tempdirs.h).
-    proc->preserveTempFile();
-
-    // Open the new temp file in a follow-mode tab
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, newPath.toUtf8().constData(), 1 );
-        hostNotify( notification );
-    }
-}
-
-bool PortWidget::startSession( const SerialConfig& config, const QString& savePath )
-{
-    const auto& name = config.portName;
-    if ( name.isEmpty() || sessions_.contains( name ) ) {
-        return false;
-    }
-
-    // The baud rate combo is editable, so its text may not be a rate.
-    if ( config.baudRate <= 0 ) {
-        const auto message
-            = QString( "Serial capture not started for %1: invalid baud rate." ).arg( name );
-        hostLog( LOGSQUIRL_LOG_WARNING, message );
-        hostNotify( message );
-        return false;
-    }
-
-    // Two sessions appending to one file would interleave their lines.  A
-    // path that is not a full one is left to SerialProcess::start() to refuse.
-    const auto absoluteSavePath = SerialProcess::absoluteUserPath( savePath );
-    if ( !absoluteSavePath.isEmpty() && isFileInUse( absoluteSavePath ) ) {
-        const auto message = QString( "Serial capture not started for %1: another session is "
-                                      "already writing to %2." )
-                                 .arg( name, savePath );
-        hostLog( LOGSQUIRL_LOG_WARNING, message );
-        hostNotify( message );
-        return false;
-    }
-
-    auto* proc = new SerialProcess( config, savePath, this );
-
-    connect( proc, &SerialProcess::finished, this,
-             [ this, name ]() { onSessionFinished( name ); } );
-
-    connect( proc, &SerialProcess::errorOccurred, this,
-             [ this, name ]( const QString& msg ) { onSessionError( name, msg ); } );
-
-    connect( proc, &SerialProcess::sizeLimitReached, this,
-             [ this, name ]() { onSizeLimitReached( name ); } );
-
-    if ( !proc->start() ) {
-        // start() has reported why through errorOccurred()
-        delete proc;
-        return false;
-    }
-
-    sessions_.insert( name, proc );
-
-    // Ask the host to open the log file in a follow-mode tab
-    if ( g_state.api && g_state.handle ) {
-        const auto path = proc->tempFilePath().toUtf8();
-        g_state.api->open_file( g_state.handle, path.constData(), 1 );
-    }
-    hostNotify(
-        QString( "Serial capture started for %1 at %2 baud" ).arg( name ).arg( config.baudRate ) );
-
-    updatePortCombo(); // Update combo box markers
-    return true;
-}
-
-void PortWidget::stopSession( const QString& portName )
-{
-    auto* proc = takeSession( portName );
-    if ( !proc ) {
-        return;
-    }
-
-    proc->stop();
-    proc->preserveTempFile();
-
-    hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
-                    .arg( portName )
-                    .arg( proc->lineCount() ) );
-
-    proc->deleteLater();
-    updatePortCombo();
-}
-
-qint64 PortWidget::sessionLineCount( const QString& portName ) const
-{
-    auto* proc = sessions_.value( portName, nullptr );
-    return proc ? proc->lineCount() : 0;
-}
-
-bool PortWidget::isSessionActive( const QString& portName ) const
-{
-    return sessions_.contains( portName );
-}
-
-bool PortWidget::sendToSession( const QString& portName, const QByteArray& data,
-                                TxLineEnding lineEnding )
-{
-    auto* proc = sessions_.value( portName, nullptr );
-    if ( !proc || !proc->isRunning() ) {
-        return false;
-    }
-
-    // Set the line ending for this transmission and send
-    proc->setTxLineEnding( lineEnding );
-    return proc->sendData( data );
 }
 
 // ── Private slots ───────────────────────────────────────────────────────
-
-void PortWidget::refreshPorts()
-{
-    setPorts( SerialProcess::discoverPorts() );
-}
-
-void PortWidget::setPorts( const QStringList& ports )
-{
-    ports_ = ports;
-    updatePortCombo();
-    Q_EMIT portsChanged();
-}
 
 void PortWidget::updatePortCombo()
 {
     const auto currentSelection = currentPortName();
     portCombo_->clear();
 
-    if ( ports_.isEmpty() ) {
+    const auto& ports = sessions_->ports();
+    if ( ports.isEmpty() ) {
         portCombo_->addItem( "(no ports)" );
         portCombo_->setEnabled( false );
     }
     else {
         portCombo_->setEnabled( true );
-        for ( const auto& name : ports_ ) {
+        for ( const auto& name : ports ) {
             // Mark ports that already have an active session
-            if ( sessions_.contains( name ) ) {
-                portCombo_->addItem( name + " \u25CF", name );
+            if ( sessions_->isSessionActive( name ) ) {
+                portCombo_->addItem( name + " ●", name );
             }
             else {
                 portCombo_->addItem( name, name );
@@ -466,7 +261,7 @@ void PortWidget::startCapture()
     }
 
     // Don't start twice for the same port
-    if ( sessions_.contains( name ) ) {
+    if ( sessions_->isSessionActive( name ) ) {
         hostLog( LOGSQUIRL_LOG_WARNING, "Serial capture already running for " + name );
         return;
     }
@@ -477,17 +272,17 @@ void PortWidget::startCapture()
               ? savePathEdit_->text()
               : QString();
 
-    startSession( buildConfig(), savePath );
+    sessions_->startSession( buildConfig(), savePath );
 }
 
 void PortWidget::stopCapture()
 {
-    stopSession( currentPortName() );
+    sessions_->stopSession( currentPortName() );
 }
 
 void PortWidget::stopAllCaptures()
 {
-    stopAll();
+    sessions_->stopAll();
 
     hostNotify( "All serial sessions stopped." );
 }
@@ -512,52 +307,13 @@ void PortWidget::sendCapture()
     }
 
     const auto name = currentPortName();
-    if ( name.isEmpty() || !sessions_.contains( name ) ) {
+    if ( name.isEmpty() || !sessions_->isSessionActive( name ) ) {
         return;
     }
 
     const auto lineEnding = static_cast<TxLineEnding>( lineEndingCombo_->currentData().toInt() );
-    sendToSession( name, text.toUtf8(), lineEnding );
+    sessions_->sendToSession( name, text.toUtf8(), lineEnding );
     sendEdit_->clear();
-}
-
-void PortWidget::onSessionFinished( const QString& portName )
-{
-    auto* proc = takeSession( portName );
-    if ( !proc ) {
-        return;
-    }
-
-    // Preserve the temp file so the LogSquirl tab keeps its content.
-    // When using a save path the file is already persistent.
-    proc->preserveTempFile();
-    proc->deleteLater();
-
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
-
-    // A session ends by itself when its device is unplugged; find out
-    // whether the port is gone
-    refreshPorts();
-}
-
-void PortWidget::onSizeLimitReached( const QString& portName )
-{
-    const auto* proc = sessions_.value( portName, nullptr );
-    if ( !proc ) {
-        return;
-    }
-    // The line being received goes on in the new file, kept whole.
-    rotateLogOf(
-        portName, SerialProcess::PartialLine::Keep,
-        QString( "The capture of %1 reached its size limit of %2; it goes on in a new tab." )
-            .arg( portName, QLocale().formattedDataSize( proc->config().maxFileBytes ) ) );
-}
-
-void PortWidget::onSessionError( const QString& portName, const QString& message )
-{
-    hostLog( LOGSQUIRL_LOG_ERROR, portName + ": " + message );
-
-    hostNotify( "Serial error (" + portName + "): " + message );
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────
@@ -566,8 +322,9 @@ void PortWidget::updateUiState()
 {
     const auto name = currentPortName();
     const auto hasPort = !name.isEmpty();
-    const auto isActive = hasPort && sessions_.contains( name );
-    const auto anyActive = !sessions_.isEmpty();
+    const auto isActive = hasPort && sessions_->isSessionActive( name );
+    const auto activeCount = sessions_->activeSessionCount();
+    const auto anyActive = activeCount > 0;
 
     startButton_->setEnabled( hasPort && !isActive );
     stopButton_->setEnabled( isActive );
@@ -579,34 +336,11 @@ void PortWidget::updateUiState()
     lineEndingCombo_->setEnabled( isActive );
 
     if ( anyActive ) {
-        statusLabel_->setText( QString( "%1 active session(s)" ).arg( sessions_.size() ) );
+        statusLabel_->setText( QString( "%1 active session(s)" ).arg( activeCount ) );
     }
     else {
         statusLabel_->setText( "No active sessions" );
     }
-}
-
-SerialProcess* PortWidget::takeSession( const QString& portName )
-{
-    auto* proc = sessions_.take( portName );
-    if ( proc ) {
-        // The session is over as far as this widget is concerned.  Stopping
-        // it emits finished(), and onSessionFinished() must not act on that:
-        // it would end the session a second time, and rescan the ports once
-        // per session.
-        proc->disconnect( this );
-    }
-    return proc;
-}
-
-bool PortWidget::isFileInUse( const QString& path ) const
-{
-    for ( const auto* proc : sessions_ ) {
-        if ( isSameFile( proc->tempFilePath(), path ) ) {
-            return true;
-        }
-    }
-    return false;
 }
 
 QString PortWidget::currentPortName() const

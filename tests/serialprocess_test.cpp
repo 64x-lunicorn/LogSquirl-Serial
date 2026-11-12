@@ -473,6 +473,125 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
 #endif
 }
 
+SCENARIO( "a session that has not started has counted nothing", "[serialprocess][counters]" )
+{
+    GIVEN( "a SerialProcess that has not been started" )
+    {
+        SerialProcess proc( configFor( kMissingPort ) );
+
+        THEN( "its counters are zero and it has no start time" )
+        {
+            REQUIRE( proc.totalLineCount() == 0 );
+            REQUIRE( proc.receivedBytes() == 0 );
+            REQUIRE( proc.fileSize() == 0 );
+            REQUIRE( proc.rotationCount() == 0 );
+            REQUIRE( proc.nextRotationSize() == 0 );
+            REQUIRE_FALSE( proc.startTime().isValid() );
+        }
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a session's counters follow what it captured", "[serialprocess][counters]" )
+{
+    GIVEN( "a running session whose log file is rotated at 1000 bytes" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 1000;
+        SerialProcess proc( cfg );
+        const auto beforeStart = QDateTime::currentDateTime();
+        REQUIRE( proc.start() );
+        const auto afterStart = QDateTime::currentDateTime();
+
+        THEN( "it knows when it started, and when its file is rotated" )
+        {
+            REQUIRE( proc.startTime() >= beforeStart );
+            REQUIRE( proc.startTime() <= afterStart );
+            REQUIRE( proc.nextRotationSize() == 1000 );
+            REQUIRE( proc.rotationCount() == 0 );
+        }
+
+        WHEN( "the device sends two lines and part of a third" )
+        {
+            REQUIRE( device.send( "first\r\nsecond\nthi" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.receivedBytes() == 17; } ) );
+
+            THEN( "the bytes received, the lines written and the file's size are counted" )
+            {
+                REQUIRE( proc.receivedBytes() == 17 );
+                REQUIRE( proc.totalLineCount() == 2 );
+                REQUIRE( proc.fileSize() == 13 ); // "first\nsecond\n"
+            }
+
+            AND_WHEN( "the log is rotated, and the device ends its line" )
+            {
+                REQUIRE_FALSE( proc.rotateLog( SerialProcess::PartialLine::Keep ).isEmpty() );
+                REQUIRE( device.send( "rd\n" ) );
+                REQUIRE( waitFor( [ &proc ]() { return proc.totalLineCount() == 3; } ) );
+
+                THEN( "the rotation is counted, and the new file's size starts again" )
+                {
+                    REQUIRE( proc.rotationCount() == 1 );
+                    REQUIRE( proc.fileSize() == 6 ); // "third\n"
+                    REQUIRE( proc.nextRotationSize() == 1000 );
+                }
+
+                THEN( "the lines and bytes of the whole session go on" )
+                {
+                    REQUIRE( proc.receivedBytes() == 20 );
+                    REQUIRE( proc.totalLineCount() == 3 );
+                    REQUIRE( proc.lineCount() == 1 );
+                }
+            }
+        }
+    }
+
+    GIVEN( "a save path that already holds a capture" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        {
+            QFile earlier( savePath );
+            REQUIRE( earlier.open( QIODevice::WriteOnly ) );
+            earlier.write( "earlier\n" );
+        }
+        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        REQUIRE( proc.start() );
+
+        WHEN( "the capture appends a line" )
+        {
+            REQUIRE( device.send( "new\n" ) );
+            REQUIRE( waitFor( [ &proc ]() { return proc.totalLineCount() == 1; } ) );
+
+            THEN( "the file's size counts what it held, the bytes received do not" )
+            {
+                REQUIRE( proc.fileSize() == 12 );
+                REQUIRE( proc.receivedBytes() == 4 );
+            }
+        }
+    }
+
+    GIVEN( "a running session without a size limit" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        auto cfg = configFor( device.devicePath() );
+        cfg.maxFileBytes = 0;
+        SerialProcess proc( cfg );
+        REQUIRE( proc.start() );
+
+        THEN( "no rotation is due" )
+        {
+            REQUIRE( proc.nextRotationSize() == 0 );
+        }
+    }
+}
+#endif
+
 #ifdef Q_OS_UNIX
 SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
 {
@@ -705,6 +824,12 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
         REQUIRE( proc.start() );
         REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
         REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
+
+        THEN( "the next rotation is due once the file has grown by the limit again" )
+        {
+            REQUIRE( proc.rotationCount() == 0 );
+            REQUIRE( proc.nextRotationSize() == proc.fileSize() + 16 );
+        }
 
         WHEN( "the file grows by less than the limit again" )
         {

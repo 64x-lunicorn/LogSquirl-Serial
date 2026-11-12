@@ -38,11 +38,11 @@
  *      which is init_ex() with the base table's size, if it is older than
  *      LogSquirl 26.11 — we store the pointers and the size, register
  *      a menu action that opens the serial monitor dialog, create the
- *      PortWidget and a SidebarWidget over it, and register the latter as a
- *      sidebar tab.
+ *      Sessions and two views of them, the PortWidget dialog and a
+ *      SidebarWidget, and register the latter as a sidebar tab.
  *   3. User interacts with the dialog (select port, configure, start, stop).
  *   4. Host calls shutdown() — we unregister + delete the sidebar, stop all
- *      sessions, destroy the dialog, and clear state.
+ *      sessions, destroy the dialog and the sessions, and clear state.
  *
  * No exception may leave an entry point or a host callback: the host is C,
  * and an exception escaping into it terminates LogSquirl.  Their work runs
@@ -55,6 +55,7 @@
 
 #include "portwidget.h"
 #include "serialprocess.h"
+#include "sessions.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
 
@@ -139,8 +140,12 @@ static bool guarded( const char* what, Work&& work ) noexcept
 /// Create (if needed) and show the serial monitor dialog.
 static void showDialog()
 {
+    if ( !serial_monitor::g_state.sessions ) {
+        return; // not initialised: nothing to show
+    }
     if ( !serial_monitor::g_state.dialog ) {
-        serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
+        serial_monitor::g_state.dialog
+            = new serial_monitor::PortWidget( serial_monitor::g_state.sessions );
     }
     auto* dialog = serial_monitor::g_state.dialog;
 
@@ -300,21 +305,23 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         api->register_menu_action( handle, "Plugins", "Serial Monitor\u2026", &showSerialDialog,
                                    nullptr );
 
-        // Create the PortWidget early so the sidebar panel can reference it.
-        serial_monitor::g_state.dialog = new serial_monitor::PortWidget();
+        // The captures, and the dialog over them (shown from the menu).
+        // Creating the sessions scans the ports, once, for both views.
+        auto* sessions = new serial_monitor::Sessions();
+        serial_monitor::g_state.sessions = sessions;
+        serial_monitor::g_state.dialog = new serial_monitor::PortWidget( sessions );
 
         // The host shuts the plugin down both when LogSquirl quits (after
         // aboutToQuit) and when the plugin is disabled or updated at runtime,
         // with the tabs left open; only in the first case may the temporary
         // files go.
         if ( auto* app = QCoreApplication::instance() ) {
-            QObject::connect( app, &QCoreApplication::aboutToQuit, serial_monitor::g_state.dialog,
+            QObject::connect( app, &QCoreApplication::aboutToQuit, sessions,
                               []() { serial_monitor::g_state.quitting = true; } );
         }
 
         // Register a sidebar tab for serial session management
-        serial_monitor::g_state.sidebarWidget
-            = new serial_monitor::SidebarWidget( serial_monitor::g_state.dialog );
+        serial_monitor::g_state.sidebarWidget = new serial_monitor::SidebarWidget( sessions );
         api->register_sidebar_tab( handle, "Serial",
                                    static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
         serial_monitor::g_state.sidebarTabRegistered = true;
@@ -370,11 +377,18 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         st.sidebarWidget = nullptr;
     }
 
-    if ( st.dialog ) {
+    // The sessions stop while the dialog still shows them, and go after it.
+    if ( st.sessions ) {
         guarded( "stopping the serial sessions",
-                 [] { serial_monitor::g_state.dialog->stopAll(); } );
+                 [] { serial_monitor::g_state.sessions->stopAll(); } );
+    }
+    if ( st.dialog ) {
         guarded( "shutdown", [] { delete serial_monitor::g_state.dialog; } );
         st.dialog = nullptr;
+    }
+    if ( st.sessions ) {
+        guarded( "shutdown", [] { delete serial_monitor::g_state.sessions; } );
+        st.sessions = nullptr;
     }
 
     // The tabs close with LogSquirl: remove the files of every instance of

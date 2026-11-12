@@ -32,28 +32,31 @@ sequenceDiagram
     Host->>Plugin: logsquirl_plugin_init(api, handle)
     Plugin->>Plugin: Store api + handle in g_state
     Plugin->>Host: api->register_menu_action("Plugins", "Serial Monitor…", callback)
+    Plugin->>Plugin: Create Sessions, PortWidget (QDialog) and SidebarWidget
+    Plugin->>Host: api->register_sidebar_tab("Serial", sidebarWidget)
     Plugin-->>Host: return 0 (success)
 
     Note over Host,Plugin: User clicks "Serial Monitor…" in Plugins menu
 
     Host->>Plugin: showSerialDialog() callback
-    Plugin->>Plugin: Create PortWidget (QDialog)
+    Plugin->>Plugin: Show the PortWidget
 
     Note over Plugin: User selects port, configures settings, clicks Start
 
-    Plugin->>Plugin: SerialProcess::start() — open QSerialPort
+    Plugin->>Plugin: Sessions::startSession() — SerialProcess::start() opens QSerialPort
     Plugin->>Host: api->open_file(tempFilePath, follow=1)
+    Plugin->>Plugin: sessionStarted() — both views update
 
     Note over Host: New tab opens with live serial data
 
     Note over Plugin: User clicks Stop
 
-    Plugin->>Plugin: SerialProcess::stop() + preserveTempFile()
+    Plugin->>Plugin: SerialProcess::stop() + preserveTempFile(), sessionStopped()
 
     Note over Host: Tab stays open with captured output
 
     Host->>Plugin: logsquirl_plugin_shutdown()
-    Plugin->>Plugin: stopAll(), delete dialog, clear g_state
+    Plugin->>Plugin: delete sidebar, stopAll(), delete dialog and sessions, clear g_state
 ```
 
 ## Class Diagram
@@ -63,7 +66,9 @@ classDiagram
     class PluginState {
         +LogSquirlHostApi* api
         +void* handle
+        +Sessions* sessions
         +PortWidget* dialog
+        +SidebarWidget* sidebarWidget
         +bool initialised
     }
 
@@ -91,33 +96,72 @@ classDiagram
         +portName() QString
         +tempFilePath() QString
         +lineCount() qint64
+        +totalLineCount() qint64
+        +receivedBytes() qint64
+        +fileSize() qint64
+        +rotationCount() int
+        +nextRotationSize() qint64
+        +startTime() QDateTime
         +discoverPorts()$ QStringList
         +filterPorts()$ QStringList
         +defaultConfig()$ SerialConfig
         +configDir()$ QString
     }
 
-    class PortWidget {
+    class Sessions {
         -QMap sessions_
+        -QStringList ports_
+        +startSession(config, savePath) bool
+        +stopSession(port)
+        +stopAll()
+        +rotateSession(port)
+        +sendToSession(port, data, lineEnding) bool
+        +isSessionActive(port) bool
+        +activeSessionCount() int
+        +activePorts() QStringList
+        +session(port) SerialProcess*
+        +ports() QStringList
+        +refreshPorts()
+        sessionStarted(port)
+        sessionStopped(port)
+        sessionChanged(port)
+        portsChanged()
+    }
+
+    class PortWidget {
+        -Sessions* sessions_
         -QComboBox* portCombo_
         -QComboBox* baudCombo_
-        -QComboBox* dataBitsCombo_
-        -QComboBox* stopBitsCombo_
-        -QComboBox* parityCombo_
-        -QComboBox* flowControlCombo_
         -QCheckBox* timestampCheckBox_
-        +stopAll()
-        +activeSessionCount() int
-        -refreshPorts()
+        +loadDefaults()
         -startCapture()
         -stopCapture()
         -buildConfig() SerialConfig
     }
 
-    PortWidget --> SerialProcess : creates & manages
+    class SidebarWidget {
+        -Sessions* sessions_
+        -QListWidget* sessionList_
+        +loadDefaults()
+        -startCapture()
+        -updatePortList()
+    }
+
+    Sessions --> SerialProcess : creates & manages
+    PortWidget --> Sessions : view of
+    SidebarWidget --> Sessions : view of
     SerialProcess --> SerialConfig : uses
+    PluginState --> Sessions : owns
     PluginState --> PortWidget : owns
+    PluginState --> SidebarWidget : owns
 ```
+
+The dialog and the sidebar hold no session state of their own: they call
+`Sessions` and refresh on its signals, so neither polls, and both stay in step
+whichever started a session or when one ends on its own (device unplugged, log
+file not writable). A view that shows a running session's counters live reads
+them from `Sessions::session(port)` on a timer of its own: they change on every
+line, so no signal announces them.
 
 ## Key Implementation Details
 
@@ -247,3 +291,8 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[filterports]` | Port list filtering logic |
 | `[discoverports]` | Port discovery integration |
 | `[serialprocess]` | SerialProcess construction and defaults |
+| `[counters]` | A session's counters, against a pseudo-terminal |
+| `[sessions]` | Session bookkeeping in `Sessions` |
+| `[signals]` | `Sessions`' signals, and the views that follow them |
+| `[portwidget]` | The dialog as a view of the sessions |
+| `[sidebarwidget]` | The sidebar panel |
