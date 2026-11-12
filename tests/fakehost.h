@@ -80,8 +80,12 @@ public:
         api_.show_notification = []( void* handle, const char* message ) {
             self( handle )->notifications << QString::fromUtf8( message );
         };
-        api_.open_file = []( void* handle, const char* filePath, int ) {
-            self( handle )->openedFiles << QString::fromUtf8( filePath );
+        api_.open_file = []( void* handle, const char* filePath, int follow ) {
+            auto* host = self( handle );
+            host->openedFiles << QString::fromUtf8( filePath );
+            if ( follow ) {
+                host->followedFiles << QString::fromUtf8( filePath );
+            }
         };
         api_.register_menu_action = []( void* handle, const char*, const char* label,
                                         void ( *callback )( void* ), void* userData ) {
@@ -142,6 +146,7 @@ public:
     /// log_message() throws after logging a message containing this.
     QString failLogContaining;
     QStringList openedFiles;
+    QStringList followedFiles; ///< Those of openedFiles opened in follow mode.
     QList<MenuAction> menuActions;
 
 private:

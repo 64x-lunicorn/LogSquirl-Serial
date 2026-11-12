@@ -55,13 +55,6 @@
 
 namespace serial_monitor {
 
-/**
- * Configuration for a serial port session.
- *
- * Populated from the PortWidget UI and passed to the SerialProcess
- * constructor.  Sensible defaults match the most common embedded
- * device configuration: 115200 8N1, no flow control, timestamps on.
- */
 /// Line ending appended to transmitted data.
 enum class TxLineEnding {
     None, ///< No line ending appended.
@@ -76,6 +69,13 @@ constexpr qint64 kBytesPerMiB = 1024 * 1024;
 /// Size in MiB at which a log file is rotated unless the user chose another.
 constexpr int kDefaultMaxFileMiB = 1024;
 
+/**
+ * Configuration for a serial port session.
+ *
+ * Taken from a saved configuration (profiles.h) and passed to the SerialProcess
+ * constructor.  Sensible defaults match the most common embedded
+ * device configuration: 115200 8N1, no flow control, timestamps on.
+ */
 struct SerialConfig {
     QString portName;
     qint32 baudRate = 115200;
@@ -327,10 +327,64 @@ public:
         return usingSavePath_;
     }
 
-    /** Total number of lines captured so far. */
+    // ── Counters ─────────────────────────────────────────────────────
+    //
+    // What the session has done since start(): read them at any time, from
+    // the main thread.  None of them emits a signal when it changes, as most
+    // change on every line; a view that shows them live reads them on a
+    // timer of its own.
+
+    /** Lines written to the current log file; 0 again after each rotation. */
     qint64 lineCount() const
     {
         return lineCount_;
+    }
+
+    /**
+     * Lines written to all the session's log files: received ones and the
+     * [TX] lines of sendData().  Not reset by a rotation.
+     */
+    qint64 totalLineCount() const
+    {
+        return totalLineCount_;
+    }
+
+    /** Bytes received from the device, as they came, before line splitting. */
+    qint64 receivedBytes() const
+    {
+        return receivedBytes_;
+    }
+
+    /**
+     * Size of the current log file, in bytes: what the session wrote to it
+     * (timestamps and escapes included), plus what a save path appended to
+     * held already.  0 again after each rotation.
+     */
+    qint64 fileSize() const
+    {
+        return fileBytes_;
+    }
+
+    /** How often the log has been rotated (rotateLog() that succeeded). */
+    int rotationCount() const
+    {
+        return rotationCount_;
+    }
+
+    /**
+     * File size at which sizeLimitReached() is emitted next: the limit
+     * (SerialConfig::maxFileBytes) after start() or a rotation, further on
+     * after a rotation that failed.  0 without a limit, or before start().
+     */
+    qint64 nextRotationSize() const
+    {
+        return config_.maxFileBytes > 0 ? nextRotationAt_ : 0;
+    }
+
+    /** When start() last opened the port; invalid before. */
+    const QDateTime& startTime() const
+    {
+        return startTime_;
     }
 
 Q_SIGNALS:
@@ -399,10 +453,13 @@ private:
     /// The log file open in tempFile_, which an open by descriptor leaves
     /// without a name; empty while none is.
     QString logPath_;
-    QByteArray readBuffer_;    ///< Accumulates partial lines from the port.
-    bool readAfterCr_ = false; ///< Whether the data read so far ended with a CR.
-    qint64 lineCount_ = 0;
-    int rotationCount_ = 0;       ///< Incremented on each rotateLog() call.
+    QByteArray readBuffer_;       ///< Accumulates partial lines from the port.
+    bool readAfterCr_ = false;    ///< Whether the data read so far ended with a CR.
+    qint64 lineCount_ = 0;        ///< Lines in the current log file.
+    qint64 totalLineCount_ = 0;   ///< Lines in all log files since start().
+    qint64 receivedBytes_ = 0;    ///< Bytes read from the port since start().
+    QDateTime startTime_;         ///< When start() opened the port.
+    int rotationCount_ = 0;       ///< Incremented on each successful rotateLog().
     bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
     bool createdLogFile_ = false; ///< True when start() created the log file.
     bool portFailed_ = false;     ///< True once the open port reported an error.

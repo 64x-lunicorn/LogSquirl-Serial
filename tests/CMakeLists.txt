@@ -21,7 +21,10 @@ add_executable(logsquirl_serial_tests
     serialprocess_test.cpp
     hostapi_test.cpp
     takelines_test.cpp
-    portwidget_test.cpp
+    sessions_test.cpp
+    profiles_test.cpp
+    connectiontile_test.cpp
+    portdialog_test.cpp
     generatelogpath_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
@@ -35,7 +38,7 @@ set_target_properties(logsquirl_serial_tests PROPERTIES
 target_include_directories(logsquirl_serial_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/include"   # logsquirl_plugin_api.h
-        "${CMAKE_SOURCE_DIR}/src"       # plugin.h, serialprocess.h, portwidget.h
+        "${CMAKE_SOURCE_DIR}/src"       # plugin.h, serialprocess.h, sessions.h, …
 )
 
 # Link against the same Qt6 modules and Catch2.
@@ -56,7 +59,10 @@ target_sources(logsquirl_serial_tests
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/serialprocess.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
-        "${CMAKE_SOURCE_DIR}/src/portwidget.cpp"
+        "${CMAKE_SOURCE_DIR}/src/sessions.cpp"
+        "${CMAKE_SOURCE_DIR}/src/profiles.cpp"
+        "${CMAKE_SOURCE_DIR}/src/portdialog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/connectiontile.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/baudrate.cpp"
 )

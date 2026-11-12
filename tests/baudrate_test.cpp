@@ -30,8 +30,9 @@
 
 #include "baudrate.h"
 #include "fakehost.h"
-#include "portwidget.h"
-#include "sidebarwidget.h"
+#include "portdialog.h"
+#include "profiles.h"
+#include "sessions.h"
 
 #include <QComboBox>
 #include <QLocale>
@@ -41,10 +42,11 @@
 
 using serial_monitor::baudRateFrom;
 using serial_monitor::initBaudRateCombo;
-using serial_monitor::PortWidget;
+using serial_monitor::PortDialog;
+using serial_monitor::ProfileStore;
 using serial_monitor::selectBaudRate;
 using serial_monitor::SerialConfig;
-using serial_monitor::SidebarWidget;
+using serial_monitor::Sessions;
 using serial_test::FakeHost;
 
 namespace {
@@ -189,28 +191,26 @@ SCENARIO( "a baud rate combo reads numbers the same way in every locale", "[baud
     }
 }
 
-SCENARIO( "a custom default baud rate is applied to the dialog and sidebar", "[baudrate]" )
+SCENARIO( "a custom default baud rate is proposed for a new configuration", "[baudrate]" )
 {
     GIVEN( "a default baud rate that is not in the standard list" )
     {
         FakeHost host;
         saveDefaultBaud( host, 250000 );
 
-        WHEN( "the dialog and sidebar are created" )
+        WHEN( "the dialog sets up a new configuration" )
         {
-            PortWidget portWidget;
-            SidebarWidget sidebar( &portWidget );
+            Sessions sessions;
+            ProfileStore profiles( host.configDir() + "/serial.ini" );
+            PortDialog dialog( &profiles, &sessions );
+            dialog.newConfiguration();
 
-            THEN( "both select the configured rate" )
+            THEN( "it selects the configured rate" )
             {
-                auto* dialogCombo = portWidget.findChild<QComboBox*>( "baudRate" );
-                auto* sidebarCombo = sidebar.findChild<QComboBox*>( "baudRate" );
+                auto* dialogCombo = dialog.findChild<QComboBox*>( "baudRate" );
                 REQUIRE( dialogCombo );
-                REQUIRE( sidebarCombo );
                 REQUIRE( baudRateFrom( dialogCombo ) == 250000 );
-                REQUIRE( baudRateFrom( sidebarCombo ) == 250000 );
                 REQUIRE( isSorted( ratesIn( *dialogCombo ) ) );
-                REQUIRE( isSorted( ratesIn( *sidebarCombo ) ) );
             }
         }
     }
@@ -221,19 +221,19 @@ SCENARIO( "a session with an invalid baud rate is refused", "[baudrate]" )
     GIVEN( "a configuration without a usable baud rate" )
     {
         FakeHost host;
-        PortWidget widget;
+        Sessions sessions;
         SerialConfig cfg;
         cfg.portName = "logsquirl-test-port";
         cfg.baudRate = 0;
 
         WHEN( "starting a session" )
         {
-            const auto started = widget.startSession( cfg );
+            const auto started = sessions.startSession( cfg );
 
             THEN( "it is rejected with a notification" )
             {
                 REQUIRE_FALSE( started );
-                REQUIRE( widget.activeSessionCount() == 0 );
+                REQUIRE( sessions.activeSessionCount() == 0 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "baud rate" ) );
             }

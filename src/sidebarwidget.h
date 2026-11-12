@@ -19,143 +19,164 @@
 
 /**
  * @file sidebarwidget.h
- * @brief Sidebar panel for serial port session management.
+ * @brief The plugin's tab "Serial" in LogSquirl's sidebar.
  *
- * This widget is registered as a tab in the LogSquirl sidebar via the
- * host API's register_sidebar_tab().  It provides:
+ *   [New configuration…]           [Stop all]
+ *   ┌ tile: board ──────────────────────────┐
+ *   └───────────────────────────────────────┘
+ *   ┌ tile: console ────────────────────────┐
+ *   └───────────────────────────────────────┘
  *
- *   - Port combo box with refresh button
- *   - Serial settings (baud, data bits, stop bits, parity, flow, timestamps)
- *   - Start / Stop capture buttons
- *   - Active sessions list showing port name, line count, and
- *     per-session Rotate / Stop buttons
- *   - A "Stop All" button
+ * One tile (connectiontile.h) per saved configuration (profiles.h), in the
+ * order they were saved, with what the configuration is (its port, its
+ * frame such as `115200 8N1`, its flow control) and a Start / Stop button.
+ * Tiles on different ports run at the same time, one session each
+ * (sessions.h).
  *
- * The panel delegates session management to the PortWidget (which also
- * remains available as a standalone dialog via the Plugins menu).
+ * A tile's session is the one Sessions knows it started (Sessions::portOf()
+ * of its name), so a tile shows its capture as running also after its port
+ * was changed in the dialog.  A tile whose port is captured by another
+ * configuration says so in its details ("<port> is in use by …"); its Start
+ * is refused by the sessions with a notification that says the same.
+ *
+ * While its capture runs, a tile shows what it does, in its details:
+ *
+ *   running · 12 lines/s · 0:05:31
+ *   1,234 lines · 56.7 KiB received
+ *   file 61.2 KiB · new file at 1.0 GiB · 0 rotations
+ *
+ * the lines per second since the refresh before and the running time
+ * (h:mm:ss); the lines written, [TX] ones too, and the bytes received; the
+ * current file's size, the size at which the next file starts ("no size
+ * limit" without one) and the rotations so far.  Below them are its controls: a command field, the
+ * line ending (CRLF, LF, CR or none; CRLF until another is chosen, kept per tile until LogSquirl
+ * quits), ➤ Send (or Return) and ↻ Rotate.  The command typed and not sent
+ * yet is kept per tile too, so a reload() after another configuration was
+ * saved or deleted does not lose it.  Send writes the command to the
+ * port the tile's session captures (Sessions::sendToSession()) and empties
+ * the field; Rotate goes on in a new file and tab
+ * (Sessions::rotateSession()).  A stopped tile shows its main facts only:
+ * no details unless its port is in use, no controls.
+ *
+ * Edit… opens the dialog with the configuration and New configuration…
+ * opens it empty; the plugin carries those out (editRequested() and
+ * newConfigurationRequested()).  Delete asks, then deletes the saved
+ * configuration through the profile store, not the dialog; when the store
+ * cannot, a message box says why.  The tiles follow the store: reload()
+ * shows the configurations saved now whenever it changed.  They follow the
+ * sessions' signals: a start, stop or rotation shows at once.  The counters
+ * change on every line, without a signal: while some capture runs, a timer
+ * reads them once a second (refresh()); while none runs, nothing is polled.
+ *
+ * Children named for tests: "newConfiguration", "stopAll", "empty" (the
+ * hint shown without configurations), and the tiles ("tile"), each with
+ * its "controls": "command", "lineEnding", "send", "rotate".
+ *
+ * OWNERSHIP
+ * ─────────
+ * Created by logsquirl_plugin_init() and registered with
+ * register_sidebar_tab.  logsquirl_plugin_shutdown() unregisters and
+ * deletes it, before the store and the sessions it shows.
  */
 
 #pragma once
 
 #include "serialprocess.h"
 
-#include <QCheckBox>
-#include <QComboBox>
-#include <QLabel>
-#include <QLineEdit>
-#include <QListWidget>
-#include <QPushButton>
-#include <QStringList>
-#include <QTimer>
+#include <QElapsedTimer>
+#include <QHash>
 #include <QWidget>
+
+class QLabel;
+class QLineEdit;
+class QPushButton;
+class QTimer;
+class QVBoxLayout;
 
 namespace serial_monitor {
 
-class PortWidget;
+class ConnectionTile;
+class ProfileStore;
+class Sessions;
 
-/**
- * Sidebar panel widget for serial port session control.
- *
- * Embeds port selection, serial settings, and an active-sessions list.
- * All actual session logic is delegated to PortWidget.
- */
 class SidebarWidget : public QWidget {
     Q_OBJECT
 
 public:
-    /**
-     * Construct the sidebar panel.
-     *
-     * @param portWidget  Shared PortWidget that owns the sessions.
-     *                    Must outlive this widget.
-     * @param parent      QWidget parent.
-     */
-    explicit SidebarWidget( PortWidget* portWidget, QWidget* parent = nullptr );
+    /// Shows the configurations of @p profiles and the sessions of
+    /// @p sessions, which must both outlive it.
+    SidebarWidget( ProfileStore* profiles, Sessions* sessions, QWidget* parent = nullptr );
 
-    /** Set the serial settings to the saved defaults (baud rate, timestamps). */
-    void loadDefaults();
+    /// Show the configurations saved now.
+    void reload();
 
-private Q_SLOTS:
-    /** Ask the PortWidget to re-scan for serial ports. */
-    void refreshPorts();
+    /// The tile of the configuration @p name; nullptr if there is none.
+    ConnectionTile* tile( const QString& name ) const;
 
-    /** Refill the port combo box from the PortWidget's port list. */
-    void updatePortList();
+    /// Read the running captures' counters now and show them; the timer
+    /// calls it once a second while some capture runs.
+    void refresh();
 
-    /** Start capture for the currently selected port. */
-    void startCapture();
+Q_SIGNALS:
+    /// New configuration… was clicked.
+    void newConfigurationRequested();
 
-    /** Stop capture for the currently selected port. */
-    void stopSelectedCapture();
-
-    /** Stop all active sessions. */
-    void stopAllCaptures();
-
-    /** Periodic refresh of the active-sessions list (line counts). */
-    void refreshSessionList();
-
-    /** Send the contents of the send input to the active session. */
-    void sendCommand();
+    /// Edit… was clicked on the configuration @p name.
+    void editRequested( const QString& name );
 
 private:
-    /** Build or rebuild the sessions list widget contents. */
-    void rebuildSessionList();
+    /// Start a capture of the configuration @p name, as its session's owner.
+    void start( const QString& name );
 
-    /** Return the port name of the current combo selection. */
-    QString currentPortName() const;
+    /// Stop the capture the configuration @p name started.
+    void stop( const QString& name );
 
-    /** Build a SerialConfig from the current sidebar UI selections. */
-    SerialConfig buildConfig() const;
+    /// Ask whether to delete the configuration @p name, and if so delete
+    /// it, or say why it could not be.
+    void confirmDelete( const QString& name );
 
-    /** Update button enabled/disabled states. */
-    void updateUiState();
+    /// Rotate the log of the capture the configuration @p name started.
+    void rotate( const QString& name );
 
-    /** Generate a save path for a new session based on log directory and port name. */
-    QString generateSavePath( const QString& portName ) const;
+    /// Send the text of @p command with @p lineEnding to the port the
+    /// configuration @p name captures, and empty @p command once it is sent.
+    void sendFrom( const QString& name, QLineEdit* command, TxLineEnding lineEnding );
 
-    /** Load the persisted log directory from plugin config. */
-    void loadLogDir();
+    /// The session the configuration @p name started; nullptr if none runs.
+    const SerialProcess* sessionOf( const QString& name ) const;
 
-    /** Persist the log directory to plugin config. */
-    void saveLogDir();
+    /// The tile controls of the configuration @p name's running capture:
+    /// "command", "lineEnding", "send" and "rotate".
+    QWidget* controlsFor( const QString& name );
 
-    // ── Shared state ─────────────────────────────────────────────────
-    PortWidget* portWidget_ = nullptr;
+    /// Show what the configuration of @p tile captures, or why it cannot.
+    void updateTile( ConnectionTile* tile );
 
-    // ── UI elements ──────────────────────────────────────────────────
-    QComboBox* portCombo_ = nullptr;
-    QPushButton* refreshButton_ = nullptr;
+    /// Update every tile and Stop all, after a session started, stopped or
+    /// rotated, and run the timer while some session runs.
+    void updateTiles();
 
-    // Serial settings
-    QComboBox* baudCombo_ = nullptr;
-    QComboBox* dataBitsCombo_ = nullptr;
-    QComboBox* stopBitsCombo_ = nullptr;
-    QComboBox* parityCombo_ = nullptr;
-    QComboBox* flowControlCombo_ = nullptr;
-    QCheckBox* timestampCheckBox_ = nullptr;
+    ProfileStore* profiles_;
+    Sessions* sessions_;
+    QPushButton* stopAll_;
+    QLabel* empty_;
+    QVBoxLayout* tiles_;
+    QTimer* timer_;
+    QHash<QString, ConnectionTile*> tileByName_;
+    QHash<QString, QString> savedPortByName_; ///< The port each configuration has saved.
+    /// The line ending chosen on each tile, kept when the tiles are rebuilt.
+    QHash<QString, TxLineEnding> lineEndingByName_;
+    /// The command typed on each tile and not sent yet, kept when the tiles
+    /// are rebuilt.
+    QHash<QString, QString> commandByName_;
 
-    // Action buttons
-    QPushButton* startButton_ = nullptr;
-    QPushButton* stopButton_ = nullptr;
-    QPushButton* stopAllButton_ = nullptr;
-
-    // Send command
-    QLineEdit* sendEdit_ = nullptr;
-    QPushButton* sendButton_ = nullptr;
-    QComboBox* lineEndingCombo_ = nullptr;
-
-    // Log directory
-    QLineEdit* logDirEdit_ = nullptr;
-    bool logDirSaveFailed_ = false; ///< The last save of the log directory failed.
-    QPushButton* logDirBrowseButton_ = nullptr;
-
-    // Sessions
-    QListWidget* sessionList_ = nullptr;
-    QStringList shownSessions_; ///< The ports sessionList_ shows.
-    QLabel* statusLabel_ = nullptr;
-
-    // Periodic refresh
-    QTimer* refreshTimer_ = nullptr;
+    /// What a running capture had written at the last refresh().
+    struct Sample {
+        qint64 lines = 0;
+        qint64 rate = 0; ///< Lines per second since the refresh before.
+        QElapsedTimer since;
+    };
+    QHash<QString, Sample> samples_; ///< By configuration name.
 };
 
 } // namespace serial_monitor

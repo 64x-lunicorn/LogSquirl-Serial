@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Saved port configurations, one tile each in the sidebar.** The dialog
+  now saves a port with its baud rate, data bits, stop bits, parity, flow
+  control, timestamps and log directory under a name, in `serial.ini` in the
+  plugin's configuration directory, so it is there again after a restart.
+  The Serial sidebar tab shows a tile for each saved configuration, with its
+  port, its frame such as `115200 8N1` and its flow control, and Start /
+  Stop, Edit… and Delete; *New configuration…* opens an empty dialog, and a
+  new configuration proposes the defaults of Configure and the log directory
+  saved last. A configuration edited in the dialog and saved under another
+  name is renamed, tile and all, unless its capture runs or the name is
+  taken. Tiles on different ports capture at the same time; a tile
+  whose port another one captures says so, and its Start is refused with a
+  notification naming the configuration that holds the port. The sidebar's
+  inline form and its list of active sessions are gone, as is the dialog's
+  Start / Stop: captures are started from their tiles (#50).
+- **A running tile shows what its capture does, with Send and Rotate.**
+  While it runs, a tile shows, updated every second, the lines per second
+  and how long it has run, the lines written and the bytes received, the
+  size of the current file, the size at which the next file starts and how
+  many files it has started so far. Below them, a command field with its
+  line ending (CRLF, LF, CR or none) and **➤ Send** send a command to the
+  tile's port, and **↻ Rotate** goes on in a new log file and tab: both are
+  back after the sidebar's inline form went. The line ending chosen and a
+  command typed but not sent yet stay while other configurations are saved
+  or deleted. A stopped tile shows its configuration only (#51).
 - **A log file is rotated at a size you choose.** When a capture's log file
   reaches 1 GiB, the capture goes on in a new file, opened in a new tab, and
   a notification says why; a line being received is kept whole for the new
@@ -26,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the plugin still runs there.
 
 ### Fixed
+- **An error when a capture ends, fails or reaches its size limit no longer
+  ends LogSquirl.** What a running capture reports — that it ended, an
+  error, or that its log file reached the size limit and goes on in a new
+  one — is handled in LogSquirl's event loop; an exception there, such as
+  running out of memory, is now logged instead of ending LogSquirl. So is
+  one when a tile's Edit… opens the dialog (#53).
 - **An error in the plugin no longer ends LogSquirl.** An exception in the
   plugin's start, shutdown, Configure or its menu entry is logged instead
   of escaping into LogSquirl; a start that fails is undone, the sidebar tab
