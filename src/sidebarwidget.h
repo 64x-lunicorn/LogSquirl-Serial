@@ -130,7 +130,8 @@ Q_SIGNALS:
     void editRequested( const QString& name );
 
 private:
-    /// Start a capture of the configuration @p name, as its session's owner.
+    /// Start a capture of the configuration @p name, as its session's owner
+    /// (Sessions::start(), which tells the user why it does not start).
     void start( const QString& name );
 
     /// Ask whether to delete the configuration @p name, and if so delete

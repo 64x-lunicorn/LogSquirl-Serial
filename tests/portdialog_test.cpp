@@ -32,6 +32,7 @@
 #include "connectiontile.h"
 #include "fakehost.h"
 #include "portdialog.h"
+#include "porterror.h"
 #include "profiles.h"
 #include "pseudoterminal.h"
 #include "sessions.h"
@@ -99,6 +100,15 @@ void save( PortDialog& dialog )
 QString statusOf( const PortDialog& dialog )
 {
     return child<QLabel>( dialog, "status" )->text();
+}
+
+/// The saved configuration @p name of @p port, writing to a temporary file.
+PortProfile profileFor( const QString& name, const QString& port )
+{
+    PortProfile profile;
+    profile.name = name;
+    profile.serial.portName = port;
+    return profile;
 }
 
 } // namespace
@@ -377,6 +387,47 @@ SCENARIO( "the dialog shares the sessions' port list", "[portdialog]" )
             }
         }
     }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "the dialog open while a configuration captures a device" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        World world( host );
+        REQUIRE(
+            world.sessions
+                .start( profileFor( "board", device.devicePath() ), serial_monitor::Defaults(), {} )
+                .isEmpty() );
+        auto* ports = child<QComboBox>( world.dialog, "port" );
+        ports->addItem( "/dev/logsquirl-gone" ); // as if found by the last scan
+        ports->setEditText( "/dev/logsquirl-typed" );
+        const auto scansBefore = host.logs.filter( "Discovered" ).size();
+
+        WHEN( "the device is unplugged" )
+        {
+            // A pseudo-terminal cannot be unplugged: the port reports it.
+            serial_test::reportPortError(
+                world.sessions.findChild<serial_monitor::SerialProcess*>(),
+                QSerialPort::ResourceError );
+            REQUIRE( serial_test::waitFor(
+                [ &world ] { return !world.sessions.isRunning( "board" ); } ) );
+
+            THEN( "the ports are scanned again, and the dialog offers those found, keeping the "
+                  "port typed" )
+            {
+                REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore + 1 );
+                QStringList offered;
+                for ( int i = 0; i < ports->count(); ++i ) {
+                    offered << ports->itemText( i );
+                }
+                REQUIRE( offered == world.sessions.ports() );
+                REQUIRE( ports->currentText() == "/dev/logsquirl-typed" );
+            }
+        }
+
+        world.sessions.stopAll();
+    }
+#endif
 }
 
 SCENARIO( "the empty log directory says where captures go", "[portdialog]" )

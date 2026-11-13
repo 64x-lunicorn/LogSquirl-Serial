@@ -267,8 +267,11 @@ graph TD
 `serial.ini`; the dialog saves and deletes them through it, and the sidebar
 shows one tile (`src/connectiontile.h`) for each, rebuilt whenever the store
 changes. `Sessions` (`src/sessions.h`) runs the captures, one per port, and
-keeps the port list. A tile starts its capture with its configuration's name
-as the session's owner, then stops, rotates, sends to and reads it by that
+keeps the port list. A tile starts its capture in one call,
+`Sessions::start(profile, defaults, defaultLogDir)`, which checks the
+configuration, takes the settings from it and the defaults, picks its log file,
+refuses a busy port, tells the user why it does not start, and makes the
+configuration's name the session's owner; the tile then stops, rotates, sends to and reads it by that
 name (`Sessions::stop(name)`, `rotate(name)`, `send(name, …)`,
 `captureOf(name)`) — also after its port was edited; for a name that captures
 nothing they do nothing. The views call `Sessions` and update on its
@@ -293,7 +296,8 @@ sequenceDiagram
     participant LS as LogSquirl Tab
 
     User->>SW: Click ▶ Start
-    SW->>S: startSession(config, savePath, owner = name)
+    SW->>S: start(profile, defaults, defaultLogDir)
+    S->>S: check it, settings and log file from it, port free?
     S->>SP: start()
     SP->>Port: open(ReadWrite)
     SP->>TF: create temp file

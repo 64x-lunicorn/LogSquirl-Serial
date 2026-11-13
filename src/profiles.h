@@ -24,8 +24,9 @@
  * A configuration (profile) is a port with its line settings (baud rate,
  * data bits, stop bits, parity, flow control), whether lines get a
  * timestamp, and the directory its captures are written to.  Each one is a
- * tile in the sidebar (sidebarwidget.h), started from there; the dialog
- * (portdialog.h) edits them.
+ * tile in the sidebar (sidebarwidget.h), started from there by the
+ * sessions (Sessions::start() in sessions.h, which also says what keeps one
+ * from starting); the dialog (portdialog.h) edits them.
  *
  * PROFILE STORE
  * ─────────────
@@ -81,7 +82,8 @@ struct Defaults {
     /// Size in MiB at which a log file is rotated; 0: never.
     int maxFileMiB = kDefaultMaxFileMiB;
 
-    /// The size limit in bytes, as SerialConfig::maxFileBytes takes it.
+    /// The size limit in bytes, as SerialConfig::maxFileBytes takes it
+    /// (Sessions::start() sets it on every capture).
     qint64 maxFileBytes() const;
 };
 
@@ -90,22 +92,6 @@ QString frameOf( const SerialConfig& config );
 
 /// @p flowControl in words: "no flow control", "RTS/CTS" or "XON/XOFF".
 QString flowControlName( QSerialPort::FlowControl flowControl );
-
-/// What keeps @p profile from starting a capture, in words for the user;
-/// empty if nothing (whether its port opens shows at Start).
-QString startProblem( const PortProfile& profile );
-
-/// The session configuration of @p profile, with the size limit of
-/// @p defaults (ProfileStore::defaults()).
-SerialConfig sessionConfig( const PortProfile& profile, const Defaults& defaults );
-
-/// A new log file for a capture of @p profile, named
-/// YYYY-MM-dd_HHmmss_<port>.log, in its log directory, or in
-/// @p defaultLogDir (ProfileStore::defaultLogDir()) when it has none, which
-/// is created if it does not exist; empty when both are (a temporary file
-/// then).  A log directory that is not a full path is returned as it is,
-/// for SerialProcess::start() to refuse with a message.
-QString savePathFor( const PortProfile& profile, const QString& defaultLogDir );
 
 /// The settings file of one configuration directory: its defaults, its
 /// saved configurations and the log directory saved last; the only code

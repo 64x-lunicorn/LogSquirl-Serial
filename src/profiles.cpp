@@ -128,49 +128,6 @@ QString flowControlName( QSerialPort::FlowControl flowControl )
     return QLatin1String( entryFor( kFlowControls, flowControl ).shown );
 }
 
-QString startProblem( const PortProfile& profile )
-{
-    if ( profile.serial.portName.trimmed().isEmpty() ) {
-        return QStringLiteral( "Choose the port." );
-    }
-    if ( profile.serial.baudRate <= 0 ) {
-        return QStringLiteral( "Enter a baud rate, such as 115200." );
-    }
-    if ( !profile.logDir.trimmed().isEmpty()
-         && SerialProcess::absoluteUserPath( profile.logDir ).isEmpty() ) {
-        return QStringLiteral( "The log directory %1 is not a full path; give one such as %2." )
-            .arg( profile.logDir, QDir::toNativeSeparators( QDir::homePath() + "/serial-logs" ) );
-    }
-    return {};
-}
-
-SerialConfig sessionConfig( const PortProfile& profile, const Defaults& defaults )
-{
-    auto config = profile.serial;
-    config.maxFileBytes = defaults.maxFileBytes();
-    return config;
-}
-
-QString savePathFor( const PortProfile& profile, const QString& defaultLogDir )
-{
-    auto dir = profile.logDir.trimmed();
-    if ( dir.isEmpty() ) {
-        dir = defaultLogDir;
-        if ( dir.isEmpty() ) {
-            return {};
-        }
-    }
-
-    // A relative directory is left as it is: SerialProcess::start() refuses
-    // it with a message, rather than create it in LogSquirl's working
-    // directory.
-    if ( const auto absolute = SerialProcess::absoluteUserPath( dir ); !absolute.isEmpty() ) {
-        dir = absolute;
-        QDir().mkpath( dir );
-    }
-    return SerialProcess::generateLogPath( dir, profile.serial.portName );
-}
-
 // ── The store ───────────────────────────────────────────────────────────
 
 QString ProfileStore::settingsFileIn( const QString& configDir )

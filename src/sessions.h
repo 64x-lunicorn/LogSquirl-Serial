@@ -30,11 +30,14 @@
  * scan, which every view shares.
  *
  * The sidebar (SidebarWidget) and its tiles are views of it: a tile starts
- * the session of its saved configuration (profiles.h), named as the
- * session's owner, then stops, rotates, sends to and reads it by that name
+ * the capture of its saved configuration (profiles.h) in one call,
+ * start(), which checks the configuration, sets the capture up from it and
+ * the defaults, picks its log file and refuses a busy port; the tile then
+ * stops, rotates, sends to and reads it by the configuration's name
  * (stop(), rotate(), send(), captureOf()), which do nothing once it has
  * ended.  The profile store asks it whether a configuration captures
- * (runningCheck()).  The views call its methods and update on its signals.
+ * (runningCheck()), the dialog which ports there are (ports()).  The views
+ * call its methods and update on its signals.
  * Starting, stopping and errors are notifications of the Host it is handed (host.h),
  * sent from here; a refusal is a Host::warn(), logged and notified; stopAll()
  * notifies nothing (the views say "All serial sessions stopped.", the
@@ -76,14 +79,48 @@ public:
     ~Sessions() override = default;
 
     /**
-     * Start capture for config.portName and open its log file in a
-     * followed tab.  Refused, with a host notification saying why, if the
-     * port has a session already (naming the configuration that started
-     * it), the baud rate is not one, the port cannot be opened, or another
-     * session writes to @p savePath.  sessionStarted() follows a session
-     * that started.
+     * What keeps @p profile from starting a capture, in words for the user:
+     * no port, no baud rate, or a log directory that is not a full path;
+     * empty if nothing (whether its port and its log file open shows at
+     * start()).  The dialog saves no configuration that it refuses.
+     */
+    static QString startProblem( const PortProfile& profile );
+
+    /**
+     * Start a capture of the saved configuration @p profile, as its owner
+     * (the calls by configuration name below find it by its name until it
+     * ends), and open its log file in a followed tab.
      *
-     * @param savePath  Optional path to a .log file for persistent saving.
+     * The capture has the settings of @p profile, with the size limit of
+     * @p defaults (ProfileStore::defaults()).  It writes to a new file,
+     * YYYY-MM-dd_HHmmss_<port>.log, in the profile's log directory, or in
+     * @p defaultLogDir (ProfileStore::defaultLogDir()) when it has none,
+     * created if it does not exist; to a temporary file when both are empty.
+     *
+     * Refused when startProblem() says why, when the port has a capture
+     * already (naming the configuration that holds it), when another capture
+     * writes to the file, or when the port or the file does not open.  The
+     * host has been told each refusal once: a Host::warn(), or, for a port
+     * or file that does not open, the error the capture reports (logged as
+     * an error, and notified).  sessionStarted() follows a capture that
+     * started.
+     *
+     * @return Why it was refused, as the user was notified; empty if it
+     *         started.
+     */
+    QString start( const PortProfile& profile, const Defaults& defaults,
+                   const QString& defaultLogDir );
+
+    /**
+     * Start capture for config.portName with @p config as it is, and open
+     * its log file in a followed tab: start() without a saved configuration
+     * to check and derive it from.  Refused, as start() is, if the port has
+     * a session already, another session writes to @p savePath, or the port
+     * or the file does not open.  sessionStarted() follows a session that
+     * started.
+     *
+     * @param savePath  Optional full path to a .log file for persistent
+     *                  saving; empty for a temporary file.
      * @param owner     The saved configuration that starts it (profiles.h),
      *                  if any: the calls by configuration name below find
      *                  the session through it until it ends.
@@ -215,6 +252,15 @@ Q_SIGNALS:
     void portsChanged();
 
 private:
+    /**
+     * startSession(), saying why it was refused: as the user was notified;
+     * empty if it started.
+     */
+    QString launch( const SerialConfig& config, const QString& savePath, const QString& owner );
+
+    /** Tell the user why a capture is not started (Host::warn()), and return it. */
+    QString refuse( const QString& message );
+
     /** Rotate @p portName's log and open the new file; tell the user @p notification. */
     void rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
                       const QString& notification );

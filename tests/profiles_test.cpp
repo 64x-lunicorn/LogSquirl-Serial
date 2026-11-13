@@ -356,11 +356,9 @@ SCENARIO( "the defaults are saved in the configuration directory", "[profiles]" 
                 REQUIRE( defaults.maxFileMiB == 5 );
             }
 
-            THEN( "a capture is rotated at their size, whatever its configuration" )
+            THEN( "a capture is rotated at their size (sessions_test.cpp starts one)" )
             {
-                REQUIRE(
-                    serial_monitor::sessionConfig( boardProfile(), store.defaults() ).maxFileBytes
-                    == 5 * 1024 * 1024 );
+                REQUIRE( store.defaults().maxFileBytes() == 5 * 1024 * 1024 );
             }
         }
 
@@ -615,96 +613,6 @@ SCENARIO( "a configuration is summed up for its tile", "[profiles]" )
         {
             REQUIRE( serial_monitor::frameOf( profile.serial ) == "9600 8O1.5" );
             REQUIRE( serial_monitor::flowControlName( profile.serial.flowControl ) == "XON/XOFF" );
-        }
-    }
-}
-
-SCENARIO( "a configuration says what keeps it from starting", "[profiles]" )
-{
-    GIVEN( "a configuration with a port" )
-    {
-        auto profile = boardProfile();
-
-        THEN( "nothing keeps it from starting" )
-        {
-            REQUIRE( serial_monitor::startProblem( profile ).isEmpty() );
-        }
-
-        WHEN( "it has no port" )
-        {
-            profile.serial.portName.clear();
-
-            THEN( "it asks for one" )
-            {
-                REQUIRE( serial_monitor::startProblem( profile ).contains( "port" ) );
-            }
-        }
-
-        WHEN( "its baud rate is none" )
-        {
-            profile.serial.baudRate = 0;
-
-            THEN( "it asks for one" )
-            {
-                REQUIRE( serial_monitor::startProblem( profile ).contains( "baud rate" ) );
-            }
-        }
-
-        WHEN( "its log directory is not a full path" )
-        {
-            profile.logDir = "logs";
-
-            THEN( "it says so" )
-            {
-                REQUIRE( serial_monitor::startProblem( profile ).contains( "full path" ) );
-            }
-        }
-    }
-}
-
-SCENARIO( "a configuration's capture goes to its log directory", "[profiles]" )
-{
-    GIVEN( "a store on a configuration directory" )
-    {
-        QTemporaryDir configDir;
-        const ProfileStore store( configDir.path() );
-        PortProfile profile;
-        profile.serial.portName = "/dev/ttyUSB0";
-
-        WHEN( "the configuration has no log directory" )
-        {
-            const auto path = serial_monitor::savePathFor( profile, store.defaultLogDir() );
-
-            THEN( "the capture goes to the logs folder of the configuration directory" )
-            {
-                REQUIRE( QFileInfo( path ).absolutePath() == configDir.filePath( "logs" ) );
-                REQUIRE( QFileInfo( path ).fileName().endsWith( "_ttyUSB0.log" ) );
-            }
-        }
-
-        WHEN( "the configuration has a log directory that does not exist yet" )
-        {
-            QTemporaryDir root;
-            profile.logDir = root.filePath( "captures" );
-            const auto path = serial_monitor::savePathFor( profile, store.defaultLogDir() );
-
-            THEN( "the directory is created, and the capture goes there" )
-            {
-                REQUIRE( QFileInfo( path ).absolutePath() == profile.logDir );
-                REQUIRE( QFileInfo( profile.logDir ).isDir() );
-            }
-        }
-    }
-
-    GIVEN( "a store without a configuration directory" )
-    {
-        const ProfileStore store( {} );
-        PortProfile profile;
-        profile.serial.portName = "/dev/ttyUSB0";
-
-        THEN( "a configuration without a log directory captures to a temporary file" )
-        {
-            REQUIRE( serial_monitor::savePathFor( profile, store.defaultLogDir() ).isEmpty() );
         }
     }
 }

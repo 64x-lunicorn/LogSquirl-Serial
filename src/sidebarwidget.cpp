@@ -346,14 +346,10 @@ void SidebarWidget::start( const QString& name )
         reload(); // deleted meanwhile
         return;
     }
-    if ( const auto problem = startProblem( *profile ); !problem.isEmpty() ) {
-        host_.warn( QStringLiteral( "Serial capture %1 not started: %2" ).arg( name, problem ) );
-        return;
-    }
-    // Refused with a notification when the port is captured already, or
-    // does not open; sessionStarted() updates the tile when it starts.
-    sessions_->startSession( sessionConfig( *profile, profiles_->defaults() ),
-                             savePathFor( *profile, profiles_->defaultLogDir() ), name );
+    // A refusal (the configuration incomplete, its port captured already,
+    // its port or file not opening) the sessions have told the user, once;
+    // sessionStarted() updates the tile when it starts.
+    sessions_->start( *profile, profiles_->defaults(), profiles_->defaultLogDir() );
 }
 
 void SidebarWidget::confirmDelete( const QString& name )

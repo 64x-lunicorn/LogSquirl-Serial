@@ -44,7 +44,6 @@ using serial_monitor::initBaudRateCombo;
 using serial_monitor::PortDialog;
 using serial_monitor::ProfileStore;
 using serial_monitor::selectBaudRate;
-using serial_monitor::SerialConfig;
 using serial_monitor::Sessions;
 using serial_test::FakeHost;
 
@@ -222,17 +221,18 @@ SCENARIO( "a session with an invalid baud rate is refused", "[baudrate]" )
     {
         FakeHost host;
         Sessions sessions( host );
-        SerialConfig cfg;
-        cfg.portName = "logsquirl-test-port";
-        cfg.baudRate = 0;
+        serial_monitor::PortProfile profile;
+        profile.name = "board";
+        profile.serial.portName = "logsquirl-test-port";
+        profile.serial.baudRate = 0;
 
         WHEN( "starting a session" )
         {
-            const auto started = sessions.startSession( cfg );
+            const auto problem = sessions.start( profile, serial_monitor::Defaults(), {} );
 
             THEN( "it is rejected with a notification" )
             {
-                REQUIRE_FALSE( started );
+                REQUIRE( problem.contains( "baud rate" ) );
                 REQUIRE( sessions.activeSessionCount() == 0 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "baud rate" ) );

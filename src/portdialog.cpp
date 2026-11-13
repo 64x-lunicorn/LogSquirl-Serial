@@ -316,7 +316,7 @@ void PortDialog::saveProfile()
         statusLabel_->setText( QStringLiteral( "Enter a name for the configuration to save." ) );
         return;
     }
-    if ( const auto problem = startProblem( profile ); !problem.isEmpty() ) {
+    if ( const auto problem = Sessions::startProblem( profile ); !problem.isEmpty() ) {
         statusLabel_->setText( problem );
         return;
     }

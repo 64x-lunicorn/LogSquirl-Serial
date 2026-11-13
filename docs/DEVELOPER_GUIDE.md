@@ -43,7 +43,7 @@ sequenceDiagram
 
     Note over Plugin: User clicks ▶ Start on the tile
 
-    Plugin->>Plugin: Sessions::startSession(config, savePath, owner) — SerialProcess::start() opens QSerialPort
+    Plugin->>Plugin: Sessions::start(profile, defaults, defaultLogDir) — SerialProcess::start() opens QSerialPort
     Plugin->>Host: api->open_file(logFilePath, follow=1)
     Plugin->>Plugin: sessionStarted() — the tiles update
 
@@ -142,6 +142,8 @@ classDiagram
     class Sessions {
         -QMap sessions_
         -QStringList ports_
+        +startProblem(profile)$ QString
+        +start(profile, defaults, defaultLogDir) QString
         +startSession(config, savePath, owner) bool
         +stopSession(port)
         +stopAll()
@@ -261,7 +263,7 @@ A configuration ([`src/profiles.h`](../src/profiles.h), `PortProfile`) is a
 name, a `SerialConfig` (port, baud rate, data bits, stop bits, parity, flow
 control, timestamps) and a log directory. The size at which a log file is
 rotated is not part of it: it is Configure's, for every capture
-(`sessionConfig()` adds it at Start, from `ProfileStore::defaults()`).
+(`Sessions::start()` adds it at Start, from `ProfileStore::defaults()`).
 
 `ProfileStore` is the one owner of `serial.ini`, in the configuration
 directory it is given (the host's `get_config_dir`); no other code knows the
@@ -289,7 +291,8 @@ them: a name (choosing a saved one fills in its settings), the port (the ports
 of the last scan, or any typed in), the settings and the log directory, with
 Save and Delete. Save refuses, on the status line, a configuration without a
 name, without a port, without a baud rate, or with a log directory that is not
-a full path (`startProblem()`). It remembers the saved configuration it edits
+a full path (`Sessions::startProblem()`, which a Start refuses the same way). It
+remembers the saved configuration it edits
 (chosen, opened with Edit…, or saved last; none after *New configuration…*):
 Save under another name renames that one (`ProfileStore::rename()`), so its
 tile is renamed rather than joined by a second. It starts nothing: the tiles
@@ -344,8 +347,8 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   in the sidebar, so a tile rebuilt by a save or delete of another
   configuration keeps them; neither is saved with the configuration.
 - **A tile and its session.** Sessions are keyed by port: a port runs one
-  capture at a time. Start passes the configuration's name as the session's
-  owner (`Sessions::startSession(config, savePath, owner)`), and from then
+  capture at a time. Start makes the configuration's name the session's
+  owner (`Sessions::start(profile, defaults, defaultLogDir)`), and from then
   on the tile addresses it by that name — `Sessions::stop(name)`,
   `rotate(name)`, `send(name, …)`, `captureOf(name)` for the live details —
   not through the port saved in the configuration, which may have been
@@ -356,9 +359,17 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   its own for a configuration. A second tile on a busy port
   is refused by `Sessions`, with a notification naming the configuration
   that holds the port; no refusal is silent.
-- **Start** finds the configuration in the store, says why when it cannot
-  start (`startProblem()`), and starts its capture into a new file of its
-  log directory (`savePathFor()`). **Delete** asks (`QMessageBox`), then
+- **Start** finds the configuration in the store and hands it, with the
+  store's defaults and default log directory, to `Sessions::start()` in one
+  call. That checks it (`Sessions::startProblem()`: no port, no baud rate, a
+  log directory that is not a full path), takes the capture's settings from
+  it and the size limit from the defaults, picks a new file
+  `YYYY-MM-dd_HHmmss_<port>.log` in its log directory (or the default one; a
+  temporary file without either), whose directory the capture creates when
+  it opens it, refuses a port that captures already and a file another
+  capture writes to, and returns why it did not start: the user has been
+  told so once, as a warning, or as the capture's error for a port or log
+  file that does not open. **Delete** asks (`QMessageBox`), then
   deletes through the store; it is hidden while the capture runs, and the
   store refuses then too. **Edit…** and **New configuration…** emit
   `editRequested(name)` and `newConfigurationRequested()`, which the plugin
