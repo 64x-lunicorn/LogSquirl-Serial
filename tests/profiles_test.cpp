@@ -396,7 +396,7 @@ SCENARIO( "the defaults are saved in the configuration directory", "[profiles]" 
     {
         ProfileStore store( {} );
 
-        THEN( "it falls back to the defaults, and captures to temporary files" )
+        THEN( "it falls back to the defaults, and has no default log directory" )
         {
             const auto defaults = store.defaults();
             REQUIRE( defaults.baudRate == Defaults().baudRate );
@@ -570,6 +570,25 @@ SCENARIO( "settings that are no settings load as the defaults", "[profiles]" )
                 REQUIRE( profile->serial.parity == defaults.parity );
                 REQUIRE( profile->serial.flowControl == defaults.flowControl );
                 REQUIRE( profile->serial.timestamps == defaults.timestamps );
+            }
+        }
+    }
+
+    for ( const auto& [ baud, maxFileMiB ] :
+          { std::pair<QByteArray, QByteArray>{ "fast", "big" }, { "0", "-1" }, { "-9600", "" } } ) {
+        GIVEN( "defaults with the baud rate " + baud.toStdString() + " and the size limit "
+               + maxFileMiB.toStdString() )
+        {
+            QTemporaryDir configDir;
+            writeIni( configDir,
+                      "[serial]\ndefaultBaud=" + baud + "\nmaxFileMiB=" + maxFileMiB + "\n" );
+            ProfileStore store( configDir.path() );
+
+            THEN( "they load as the built-in baud rate and size limit" )
+            {
+                REQUIRE( store.defaults().baudRate == Defaults().baudRate );
+                REQUIRE( store.defaults().maxFileMiB == Defaults().maxFileMiB );
+                REQUIRE( store.newProfile().serial.baudRate == 115200 );
             }
         }
     }

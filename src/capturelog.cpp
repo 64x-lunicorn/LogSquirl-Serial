@@ -310,6 +310,9 @@ QString CaptureLog::rotate( PartialLine partialLine, QString& error )
             error = QString( "Could not rotate the log to %1 (%2), nor reopen %3 (%4); "
                              "capture stopped." )
                         .arg( newPath, reason, oldPath, reopenError );
+            // No file is left for the part of a line kept for the new one,
+            // so close() does not report a second error for it.
+            partial_.clear();
         }
         return {};
     }

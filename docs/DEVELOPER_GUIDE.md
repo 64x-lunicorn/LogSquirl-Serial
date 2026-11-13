@@ -365,8 +365,8 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   call. That checks it (`Sessions::startProblem()`: no port, no baud rate, a
   log directory that is not a full path), takes the capture's settings from
   it and the size limit from the defaults, picks a new file
-  `YYYY-MM-dd_HHmmss_<port>.log` in its log directory (or the default one; a
-  temporary file without either), whose directory the capture creates when
+  `YYYY-MM-dd_HHmmss_<port>.log` in its log directory (or the default one;
+  refused without either), whose directory the capture creates when
   it opens it, refuses a port that captures already and a file another
   capture writes to, and returns why it did not start: the user has been
   told so once, as a warning, or as the capture's error for a port or log

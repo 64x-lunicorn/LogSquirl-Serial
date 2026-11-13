@@ -102,7 +102,7 @@ QString statusOf( const PortDialog& dialog )
     return child<QLabel>( dialog, "status" )->text();
 }
 
-/// The saved configuration @p name of @p port, writing to a temporary file.
+/// The saved configuration @p name of @p port, without a log directory of its own.
 PortProfile profileFor( const QString& name, const QString& port )
 {
     PortProfile profile;
@@ -394,10 +394,10 @@ SCENARIO( "the dialog shares the sessions' port list", "[portdialog]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
         World world( host );
-        REQUIRE(
-            world.sessions
-                .start( profileFor( "board", device.devicePath() ), serial_monitor::Defaults(), {} )
-                .isEmpty() );
+        REQUIRE( world.sessions
+                     .start( profileFor( "board", device.devicePath() ), serial_monitor::Defaults(),
+                             host.tempRoot() + "/logs" )
+                     .isEmpty() );
         auto* ports = child<QComboBox>( world.dialog, "port" );
         ports->addItem( "/dev/logsquirl-gone" ); // as if found by the last scan
         ports->setEditText( "/dev/logsquirl-typed" );

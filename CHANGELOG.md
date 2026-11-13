@@ -51,6 +51,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the plugin still runs there.
 
 ### Fixed
+- **A default baud rate that is no number is 115200 again.** A `defaultBaud`
+  in `serial.ini` that is not a positive number, such as one edited by hand,
+  was read as baud rate 0: a new configuration proposed it, and its Start
+  was refused. It is now read as 115200, as a configuration's own baud rate
+  already was; a `maxFileMiB` that is negative or no number is read as the
+  built-in size limit (#63).
+- **A capture that was rotated counts all its lines when it stops.** The
+  host log's `Closed <port> (N lines captured)` and the notification that a
+  capture stopped counted only the lines of its last file; they now count
+  every line the capture wrote, across all its files (#64).
+- **A rotation that leaves a capture without a file reports one error.**
+  When neither the new log file could be created nor the old one reopened,
+  and part of a line was waiting for the new file, stopping the capture
+  reported a second error, that the log file could not be written. Only the
+  rotation's own error is reported now (#66).
+- **A configuration never captures twice.** A configuration whose port was
+  changed while it captured could be started again, on its new port, with
+  a second capture that its tile could no longer stop. Starting a
+  configuration that already captures is now refused, saying so (#67).
 - **An error when a capture ends, fails or reaches its size limit no longer
   ends LogSquirl.** What a running capture reports — that it ended, an
   error, or that its log file reached the size limit and goes on in a new

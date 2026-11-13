@@ -727,6 +727,52 @@ SCENARIO( "a rotation that fails is told, and ends the session only without a fi
                 REQUIRE( session.finishedCount == 1 );
             }
         }
+
+        WHEN( "a part of a line is pending, the rotation keeps it, and neither file opens" )
+        {
+            session.port->deliver( "partial" );
+            QString newPath;
+            {
+                QFile::setPermissions( savePath, QFileDevice::ReadOwner );
+                const ReadOnlyDir readOnly( logDir.path() );
+                newPath = proc.rotateLog( SerialProcess::PartialLine::Keep );
+            }
+            serial_test::processEventsFor( 50 );
+
+            THEN( "only the rotation's error is reported, and the session stops once" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( session.errors.size() == 1 );
+                REQUIRE( session.errors.first().contains( "nor reopen" ) );
+                REQUIRE_FALSE( proc.isRunning() );
+                REQUIRE( session.finishedCount == 1 );
+            }
+        }
+    }
+}
+
+SCENARIO( "the closing log line counts the lines of every file of the capture", "[serialprocess]" )
+{
+    GIVEN( "a running session that has written lines before and after a rotation" )
+    {
+        QTemporaryDir logDir;
+        SubstituteSession session( logDir.filePath( "capture.log" ) );
+        auto& proc = *session.proc;
+        REQUIRE( proc.start() );
+        session.port->deliver( "one\ntwo\nthree\n" );
+        REQUIRE_FALSE( proc.rotateLog().isEmpty() );
+        session.port->deliver( "four\nfive\n" );
+
+        WHEN( "it stops" )
+        {
+            proc.stop();
+
+            THEN( "the host's log counts all five lines" )
+            {
+                REQUIRE( session.host.logs.filter( "Closed substitute (5 lines captured)" ).size()
+                         == 1 );
+            }
+        }
     }
 }
 
