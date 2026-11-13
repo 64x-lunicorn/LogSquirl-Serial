@@ -24,7 +24,10 @@
  * Tests basic construction, property accessors and the default
  * configuration without requiring real serial hardware.  The
  * scenarios that need an open port use a pseudo-terminal as the device
- * (see pseudoterminal.h) and only run on Unix.
+ * (see pseudoterminal.h) and only run on Unix.  What is written from the
+ * bytes received (framing, escapes, timestamps, [TX] lines, counters) is
+ * CaptureLog's, tested in capturelog_test.cpp; the few scenarios here that
+ * cover it check that the session hands its port's bytes to it.
  */
 
 #include <catch2/catch.hpp>
@@ -49,6 +52,7 @@
 
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;
+using serial_monitor::TxLineEnding;
 using serial_test::FakeHost;
 using serial_test::ReadOnlyDir;
 using serial_test::waitFor;
@@ -306,27 +310,6 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         }
     }
 
-    GIVEN( "a device that boots with NUL padding and baud-mismatch garbage" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-
-        SerialProcess proc( host, configFor( device.devicePath() ) );
-
-        WHEN( "it sends them before its first line of text" )
-        {
-            REQUIRE( proc.start() );
-            REQUIRE( device.send( QByteArray( "\0\0\0\x02\xF8\x1B\x7F\x80ready\n", 14 ) ) );
-
-            THEN( "the control bytes are written as visible escapes, the text as it came" )
-            {
-                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-                REQUIRE( readFile( proc.tempFilePath() )
-                         == "\\x00\\x00\\x00\\x02\xF8\\x1B\x7F\x80ready\n" );
-            }
-        }
-    }
-
     GIVEN( "a device that has sent part of a line" )
     {
         FakeHost host;
@@ -341,8 +324,17 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
 
         WHEN( "a command is sent, and the device then ends its line" )
         {
-            REQUIRE( proc.sendData( "cmd" ) );
+            REQUIRE( proc.sendData( "cmd", TxLineEnding::LF ) );
             REQUIRE( device.send( "bar\n" ) );
+
+            THEN( "the command goes to the device with the line ending it was sent with" )
+            {
+                QByteArray received;
+                REQUIRE( waitFor( [ &device, &received ] {
+                    received += device.receive();
+                    return received == "cmd\n";
+                } ) );
+            }
 
             THEN( "the part received before the command stays before it in the log" )
             {
@@ -352,60 +344,26 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         }
     }
 
-    GIVEN( "a device that has sent part of a line, ending inside a character" )
+    GIVEN( "a device on a session that timestamps its lines" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
+        auto cfg = configFor( device.devicePath() );
+        cfg.timestamps = true;
+        SerialProcess proc( host, cfg );
 
-        SerialProcess proc( host, configFor( device.devicePath() ) );
-        REQUIRE( proc.start() );
-        REQUIRE( device.send( "boot\n25 \xC2" ) ); // the first byte of a degree sign
-        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-
-        WHEN( "a command is sent, and the device then ends its line" )
-        {
-            REQUIRE( proc.sendData( "cmd" ) );
-            REQUIRE( device.send( "\xB0"
-                                  "C\n" ) );
-
-            THEN( "the character is kept whole, after the command" )
-            {
-                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
-                REQUIRE( readFile( proc.tempFilePath() )
-                         == "boot\n25 \n[TX] cmd\n\xC2\xB0"
-                            "C\n" );
-            }
-        }
-    }
-
-    GIVEN( "a device that ends its lines with a lone CR" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-
-        SerialProcess proc( host, configFor( device.devicePath() ) );
-
-        WHEN( "it sends a line and then goes quiet" )
+        WHEN( "the device sends a line" )
         {
             REQUIRE( proc.start() );
-            REQUIRE( device.send( "first\r" ) );
+            REQUIRE( device.send( "first\n" ) );
 
-            THEN( "the line is written right away, not when the next one arrives" )
+            THEN( "it is written after a timestamp" )
             {
                 REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-                REQUIRE( readFile( proc.tempFilePath() ) == "first\n" );
-            }
-
-            AND_WHEN( "the LF of a CRLF pair follows in a later read" )
-            {
-                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-                REQUIRE( device.send( "\nsecond\n" ) );
-
-                THEN( "it does not add an empty line" )
-                {
-                    REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
-                    REQUIRE( readFile( proc.tempFilePath() ) == "first\nsecond\n" );
-                }
+                const auto written = readFile( proc.tempFilePath() );
+                REQUIRE( written.size() == 32 ); // "[yyyy-MM-dd HH:mm:ss.zzz] first\n"
+                REQUIRE( written.startsWith( "[" ) );
+                REQUIRE( written.endsWith( "] first\n" ) );
             }
         }
     }
@@ -747,7 +705,7 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
 
         WHEN( "the file reaches it, and the user rotates it before the request is handled" )
         {
-            REQUIRE( proc.sendData( "a command longer than the limit" ) );
+            REQUIRE( proc.sendData( "a command longer than the limit", TxLineEnding::CRLF ) );
             REQUIRE_FALSE( proc.rotateLog().isEmpty() );
             serial_test::processEventsFor( 100 );
 
@@ -972,7 +930,7 @@ SCENARIO( "a log file that cannot be written stops the session and says why", "[
 
         WHEN( "a command is sent" )
         {
-            REQUIRE( proc.sendData( "reboot with a long command line" ) );
+            REQUIRE( proc.sendData( "reboot with a long command line", TxLineEnding::CRLF ) );
             const bool stopped = waitFor( [ &proc ]() { return !proc.isRunning(); } );
             limit.lift();
 

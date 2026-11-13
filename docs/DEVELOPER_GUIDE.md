@@ -89,10 +89,10 @@ classDiagram
         -QSerialPort port_
         -QTemporaryDir tempDir_
         -QFile tempFile_
-        -QByteArray readBuffer_
-        -qint64 lineCount_
+        -CaptureLog log_
         +start()
         +stop()
+        +sendData(data, lineEnding) bool
         +preserveTempFile()
         +isRunning() bool
         +portName() QString
@@ -106,6 +106,21 @@ classDiagram
         +startTime() QDateTime
         +discoverPorts()$ QStringList
         +filterPorts()$ QStringList
+    }
+
+    class CaptureLog {
+        +CaptureLog(timestamps, clock, maxLineLength)
+        +start(file)
+        +startFile(file)
+        +receive(data) bool
+        +send(command) bool
+        +endPartialLine() bool
+        +hasPartialLine() bool
+        +hasFailed() bool
+        +lineCount() qint64
+        +totalLineCount() qint64
+        +receivedBytes() qint64
+        +fileSize() qint64
     }
 
     class Sessions {
@@ -189,6 +204,7 @@ classDiagram
     SidebarWidget --> ConnectionTile : one per profile
     SidebarWidget --> Sessions : starts, stops, view of
     SerialProcess --> SerialConfig : uses
+    SerialProcess --> CaptureLog : feeds bytes and commands
     PluginState --> Sessions : owns
     PluginState --> ProfileStore : owns
     PluginState --> PortDialog : owns
@@ -340,12 +356,22 @@ When a session starts:
    directory
 3. `QSerialPort` is configured and opened in `ReadWrite` mode (Send needs
    to write)
-4. The `readyRead` signal triggers `onReadyRead()`:
-   - Data is read into a buffer
-   - Complete lines (split on `\n`) are processed
+4. The `readyRead` signal triggers `onReadyRead()`, which hands what it read
+   to the session's `CaptureLog` ([`src/capturelog.h`](../src/capturelog.h)).
+   The serial capture is an adapter: it reads the port and sends to it, and
+   `CaptureLog` decides what is written:
+   - `\n`, `\r\n` and a lone `\r` end a line, a CRLF split across two reads
+     included; a lone CR ends its line at once
+   - A line that never ends is forced out at 64 KiB, before a UTF-8
+     character whose last bytes have not arrived yet
    - If timestamps are enabled, `[YYYY-MM-DD HH:mm:ss.zzz] ` is prepended
-   - Each line is written to that one log file
-   - The file is flushed after each line for real-time tailing
+   - Control characters but tab are written as `\xNN` escapes
+   - A command sent (`sendData(data, lineEnding)`, the line ending per call)
+     is written as a `[TX] ` line, after the part of a line received so far,
+     so that the rest of it is not joined to the command
+   - It counts the lines and bytes the session's counters show
+   - Each line is written to that one log file, flushed after each read for
+     real-time tailing
 
 ### Timestamp Format
 
@@ -356,7 +382,9 @@ When enabled, each line is prefixed:
 ```
 
 This uses `QDateTime::currentDateTime()` — the timestamp reflects when
-LogSquirl **received** the line, not when the device sent it.
+LogSquirl **wrote** the line, once its end had arrived, not when the device
+sent it. `CaptureLog` takes the clock as a constructor argument, so its tests
+fix the time.
 
 ### Session Persistence
 
@@ -448,8 +476,9 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[plugininfo]` | Verify C ABI metadata struct |
 | `[filterports]` | Port list filtering logic |
 | `[discoverports]` | Port discovery integration |
-| `[serialprocess]` | SerialProcess construction and defaults |
-| `[counters]` | A session's counters, against a pseudo-terminal, and a running tile showing them |
+| `[capturelog]` | What is written from the bytes received and the commands sent: framing, UTF-8, escapes, timestamps, `[TX]` lines, counters, a file that refuses writes; in-process, without a port |
+| `[serialprocess]` | SerialProcess construction and defaults; a few end-to-end scenarios over a pseudo-terminal |
+| `[counters]` | `CaptureLog`'s counters, a session's against a pseudo-terminal, and a running tile showing them |
 | `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
 | `[hostapi]` | `CApiHost`, the `Host` of the C ABI, `warn()` and `guarded()` |

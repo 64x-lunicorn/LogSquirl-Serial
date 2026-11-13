@@ -232,9 +232,7 @@ bool Sessions::sendToSession( const QString& portName, const QByteArray& data,
         return false;
     }
 
-    // Set the line ending for this transmission and send
-    proc->setTxLineEnding( lineEnding );
-    return proc->sendData( data );
+    return proc->sendData( data, lineEnding );
 }
 
 // ── Queries ─────────────────────────────────────────────────────────────

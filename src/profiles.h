@@ -65,8 +65,8 @@ namespace serial_monitor {
 
 struct PortProfile {
     QString name;
-    /// The port and its settings.  Its txLineEnding and maxFileBytes are
-    /// not saved: the size limit is Configure's, for every capture.
+    /// The port and its settings.  Its maxFileBytes is not saved: the size
+    /// limit is Configure's, for every capture.
     SerialConfig serial;
     /// Where its captures are written; empty: ProfileStore::defaultLogDir().
     QString logDir;

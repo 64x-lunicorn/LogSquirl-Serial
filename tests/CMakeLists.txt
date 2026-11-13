@@ -20,7 +20,7 @@ add_executable(logsquirl_serial_tests
     parseportlist_test.cpp
     serialprocess_test.cpp
     hostapi_test.cpp
-    takelines_test.cpp
+    capturelog_test.cpp
     sessions_test.cpp
     profiles_test.cpp
     connectiontile_test.cpp
@@ -58,6 +58,7 @@ target_sources(logsquirl_serial_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/host.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capturelog.cpp"
         "${CMAKE_SOURCE_DIR}/src/serialprocess.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/sessions.cpp"

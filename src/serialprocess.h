@@ -44,6 +44,7 @@
 
 #pragma once
 
+#include "capturelog.h"
 #include "host.h"
 
 #include <QDateTime>
@@ -57,13 +58,16 @@
 
 namespace serial_monitor {
 
-/// Line ending appended to transmitted data.
+/// Line ending appended to transmitted data (SerialProcess::sendData()).
 enum class TxLineEnding {
     None, ///< No line ending appended.
     CR,   ///< Carriage return (\r).
     LF,   ///< Line feed (\n).
     CRLF  ///< Carriage return + line feed (\r\n).
 };
+
+/// The bytes of @p ending: empty for None.
+QByteArray lineEndingBytes( TxLineEnding ending );
 
 /// Bytes in a MiB, the unit the size limit is set in.
 constexpr qint64 kBytesPerMiB = 1024 * 1024;
@@ -86,7 +90,6 @@ struct SerialConfig {
     QSerialPort::Parity parity = QSerialPort::NoParity;
     QSerialPort::FlowControl flowControl = QSerialPort::NoFlowControl;
     bool timestamps = true; ///< Prepend [YYYY-MM-DD HH:mm:ss.zzz] to each line.
-    TxLineEnding txLineEnding = TxLineEnding::CRLF; ///< Line ending for sent data.
     /// Size at which the log file is rotated (SerialProcess::sizeLimitReached());
     /// 0 for no limit.
     qint64 maxFileBytes = kDefaultMaxFileMiB * kBytesPerMiB;
@@ -155,46 +158,6 @@ public:
         Keep      ///< Keep it for the new file, where the rest of it goes.
     };
 
-    /// Longest line takeLines() waits for before forcing it out.
-    static constexpr qsizetype kMaxLineLength = 64 * 1024;
-
-    /**
-     * Remove every complete line from the front of @p buffer and return
-     * the lines, without their terminator.  "\n", "\r\n" and a lone "\r"
-     * all end a line.  A CR ends its line at once, even as the last byte
-     * read, and sets @p afterCr: an LF at the start of the next call is
-     * then the second half of a CRLF pair and is skipped.  An incomplete
-     * last line stays in the buffer until
-     * more data arrives, unless it is longer than @p maxLineLength: then
-     * it is returned as a line of its own, so that a stream that never
-     * ends its lines (binary data, a progress display) cannot make the
-     * buffer grow without bound.  Such a line ends before a UTF-8
-     * character whose last bytes have not arrived yet; they stay in the
-     * buffer, so that the character is not cut in two.
-     *
-     * Extracted as a static helper so unit tests can exercise the line
-     * splitting without real hardware.
-     *
-     * @param buffer         Bytes read so far; complete lines are removed.
-     * @param afterCr        In: whether the data before @p buffer ended with
-     *                       a CR.  Out: whether @p buffer did.  Start with
-     *                       false and keep it for the next call.
-     * @param maxLineLength  Size above which an incomplete line is forced out.
-     * @return The complete lines, in order.
-     */
-    static QList<QByteArray> takeLines( QByteArray& buffer, bool& afterCr,
-                                        qsizetype maxLineLength = kMaxLineLength );
-
-    /**
-     * Return @p line with every C0 control character but tab (NUL, ESC,
-     * the bell, …) written as a visible `\xNN` escape, two upper-case hex
-     * digits.  The log file then holds text only, so that NUL padding or
-     * garbage a device sends cannot make LogSquirl take the whole file for
-     * UTF-16 or another encoding.  Other bytes, a backslash among them,
-     * are left as they are.
-     */
-    static QByteArray escapeControls( const QByteArray& line );
-
     /**
      * Return a path for a new log file in @p dir, named
      * `<yyyy-MM-dd_HHmmss>_<port>.log`.  Characters of the port name that
@@ -246,15 +209,15 @@ public:
     /**
      * Send data to the serial port and log it as a TX line.
      *
-     * Appends the configured line ending (txLineEnding) to the data before
-     * transmission.  The sent command is also written to the log file with
-     * a [TX] marker so it appears in the LogSquirl tab, after the part of a
-     * line received so far, which is written as a line of its own.
+     * Appends @p lineEnding to the data before transmission.  The sent
+     * command is also written to the log file with a [TX] marker so it
+     * appears in the LogSquirl tab (CaptureLog::send()).
      *
-     * @param data  Raw bytes to send (line ending is appended automatically).
+     * @param data        Raw bytes to send, without a line ending.
+     * @param lineEnding  What is appended to @p data on the wire; not logged.
      * @return true if the data was written successfully, false otherwise.
      */
-    bool sendData( const QByteArray& data );
+    bool sendData( const QByteArray& data, TxLineEnding lineEnding );
 
     /**
      * Prevent the temporary log file from being deleted when this
@@ -296,12 +259,6 @@ public:
         return config_;
     }
 
-    /** Update the TX line ending for subsequent sendData() calls. */
-    void setTxLineEnding( TxLineEnding ending )
-    {
-        config_.txLineEnding = ending;
-    }
-
     /**
      * Absolute path to the log file (save path or temp file).
      *
@@ -323,12 +280,12 @@ public:
     // What the session has done since start(): read them at any time, from
     // the main thread.  None of them emits a signal when it changes, as most
     // change on every line; a view that shows them live reads them on a
-    // timer of its own.
+    // timer of its own.  The line and byte counters are its CaptureLog's.
 
     /** Lines written to the current log file; 0 again after each rotation. */
     qint64 lineCount() const
     {
-        return lineCount_;
+        return log_.lineCount();
     }
 
     /**
@@ -337,13 +294,13 @@ public:
      */
     qint64 totalLineCount() const
     {
-        return totalLineCount_;
+        return log_.totalLineCount();
     }
 
     /** Bytes received from the device, as they came, before line splitting. */
     qint64 receivedBytes() const
     {
-        return receivedBytes_;
+        return log_.receivedBytes();
     }
 
     /**
@@ -353,7 +310,7 @@ public:
      */
     qint64 fileSize() const
     {
-        return fileBytes_;
+        return log_.fileSize();
     }
 
     /** How often the log has been rotated (rotateLog() that succeeded). */
@@ -411,20 +368,13 @@ private Q_SLOTS:
     void onPortError( QSerialPort::SerialPortError error );
 
 private:
-    /// Write one line to the log file, timestamped if configured and with
-    /// its control characters escaped (escapeControls()); false,
-    /// after failWrite(), if the log file cannot be written.
-    bool writeLine( const QByteArray& line );
-
-    /// Flush the log file; false, after failWrite(), if it cannot be written.
-    bool flushLogFile();
+    /// After log_ wrote (@p ok: it could): fail the session if it could not
+    /// (failWrite()), else ask for a rotation if the file reached its limit.
+    void logged( bool ok );
 
     /// The log file cannot be written (disk full, volume gone): say so once
     /// and stop the session, rather than drop every line from here on.
     void failWrite();
-
-    /** Write out a buffered partial line, e.g. before the file is closed. */
-    void flushPartialLine();
 
     /// Open @p path for the capture with @p mode, refusing anything that is
     /// not a regular file: a FIFO would block the UI thread, a symlink lead
@@ -445,18 +395,13 @@ private:
     /// The log file open in tempFile_, which an open by descriptor leaves
     /// without a name; empty while none is.
     QString logPath_;
-    QByteArray readBuffer_;       ///< Accumulates partial lines from the port.
-    bool readAfterCr_ = false;    ///< Whether the data read so far ended with a CR.
-    qint64 lineCount_ = 0;        ///< Lines in the current log file.
-    qint64 totalLineCount_ = 0;   ///< Lines in all log files since start().
-    qint64 receivedBytes_ = 0;    ///< Bytes read from the port since start().
+    CaptureLog log_;              ///< What is written to tempFile_, and counted.
     QDateTime startTime_;         ///< When start() opened the port.
     int rotationCount_ = 0;       ///< Incremented on each successful rotateLog().
     bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
     bool createdLogFile_ = false; ///< True when start() created the log file.
     bool portFailed_ = false;     ///< True once the open port reported an error.
-    bool writeFailed_ = false;    ///< True once a write to the log file failed.
-    qint64 fileBytes_ = 0;        ///< Size of the log file being written.
+    bool writeFailed_ = false;    ///< True once a failed write to the log file was reported.
     qint64 nextRotationAt_ = 0;   ///< Size at which sizeLimitReached() is due.
 };
 
