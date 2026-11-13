@@ -98,7 +98,8 @@ set(PLUGIN_INSTALL_DIR
 )
 
 install(TARGETS logsquirl_serial LIBRARY DESTINATION "${PLUGIN_INSTALL_DIR}")
-install(FILES   plugin.json              DESTINATION "${PLUGIN_INSTALL_DIR}")
+# The icon plugin.json names, as the release packages carry it.
+install(FILES   plugin.json icon.png     DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # ── Tests (opt-in) ────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build unit tests" OFF)
