@@ -31,6 +31,7 @@
 
 #include "fakehost.h"
 #include "filesizelimit.h"
+#include "porterror.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
 #include "sessions.h"
@@ -40,6 +41,8 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 
+using serial_monitor::Defaults;
+using serial_monitor::PortProfile;
 using serial_monitor::SerialConfig;
 using serial_monitor::Sessions;
 using serial_test::FakeHost;
@@ -54,14 +57,410 @@ SerialConfig configFor( const QString& portName )
     return cfg;
 }
 
+/// The saved configuration @p name of @p port, writing to @p logDir.
+PortProfile profileFor( const QString& name, const QString& port, const QString& logDir = {} )
+{
+    PortProfile profile;
+    profile.name = name;
+    profile.serial.portName = port;
+    profile.serial.timestamps = false;
+    profile.logDir = logDir;
+    return profile;
+}
+
+const QString kMissingPort = "logsquirl-test-no-such-port";
+
 } // namespace
+
+// Each refusal is told to the host once: a warning that is logged and
+// notified in the same words, or the error of a port or file that does not
+// open, logged as an error and notified.  start() returns what was notified.
+SCENARIO( "a configuration that cannot start is refused, saying why", "[sessions][start]" )
+{
+    GIVEN( "the sessions on a fake host" )
+    {
+        FakeHost host;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        host.logs.clear();
+        host.logLevels.clear();
+
+        const auto refusedOnce = [ &host, &sessions ]( const QString& problem ) {
+            REQUIRE( sessions.activeSessionCount() == 0 );
+            REQUIRE( host.openedFiles.isEmpty() );
+            REQUIRE( host.notifications == QStringList{ problem } );
+        };
+        const auto warned = [ &host ] {
+            REQUIRE( host.logs == host.notifications );
+            REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+        };
+
+        WHEN( "its configuration has no port" )
+        {
+            const auto problem
+                = sessions.start( profileFor( "board", "  ", logDir.path() ), Defaults(), {} );
+
+            THEN( "it asks for one, in a warning" )
+            {
+                refusedOnce( problem );
+                warned();
+                REQUIRE( problem == "Serial capture board not started: Choose the port." );
+            }
+        }
+
+        WHEN( "its configuration has no baud rate" )
+        {
+            auto profile = profileFor( "board", kMissingPort, logDir.path() );
+            profile.serial.baudRate = 0;
+            const auto problem = sessions.start( profile, Defaults(), {} );
+
+            THEN( "it asks for one, in a warning, before the port is tried" )
+            {
+                refusedOnce( problem );
+                warned();
+                REQUIRE( problem.startsWith( "Serial capture board not started: " ) );
+                REQUIRE( problem.contains( "baud rate" ) );
+                REQUIRE( QDir( logDir.path() ).isEmpty() );
+            }
+        }
+
+        WHEN( "its log directory is not a full path" )
+        {
+            const auto problem = sessions.start(
+                profileFor( "board", kMissingPort, "relative-logs" ), Defaults(), logDir.path() );
+
+            THEN( "it says so, in a warning, before anything is written" )
+            {
+                refusedOnce( problem );
+                warned();
+                REQUIRE( problem.contains( "relative-logs is not a full path" ) );
+                REQUIRE_FALSE( QFileInfo::exists( "relative-logs" ) );
+            }
+        }
+
+        WHEN( "its port does not open" )
+        {
+            const auto problem = sessions.start( profileFor( "board", kMissingPort, logDir.path() ),
+                                                 Defaults(), {} );
+
+            THEN( "it is told as the capture's error, and no empty file is left behind" )
+            {
+                refusedOnce( problem );
+                REQUIRE( problem.startsWith( "Serial error (" + kMissingPort + "): " ) );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_ERROR } );
+                REQUIRE( host.logs.first().startsWith( kMissingPort + ": " ) );
+                REQUIRE( QDir( logDir.path() ).isEmpty() );
+            }
+        }
+    }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "a log directory that cannot be written" )
+    {
+        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        QTemporaryDir root;
+        const serial_test::ReadOnlyDir readOnly( root.path() );
+        host.logs.clear();
+        host.logLevels.clear();
+
+        WHEN( "a configuration writing below it is started" )
+        {
+            const auto problem = sessions.start(
+                profileFor( "board", device.devicePath(), root.filePath( "logs" ) ), Defaults(),
+                {} );
+
+            THEN( "it is refused, told once as the capture's error naming the file" )
+            {
+                REQUIRE( sessions.activeSessionCount() == 0 );
+                REQUIRE_FALSE( sessions.isRunning( "board" ) );
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( host.notifications == QStringList{ problem } );
+                REQUIRE( problem.contains( "Failed to open log file " + root.filePath( "logs" ) ) );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_ERROR } );
+            }
+        }
+    }
+
+    GIVEN( "a port captured by the configuration \"board\"" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        REQUIRE(
+            sessions
+                .start( profileFor( "board", device.devicePath(), logDir.path() ), Defaults(), {} )
+                .isEmpty() );
+        host.logs.clear();
+        host.logLevels.clear();
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        WHEN( "the configuration \"console\" on the same port is started" )
+        {
+            const auto problem = sessions.start(
+                profileFor( "console", device.devicePath(), logDir.path() ), Defaults(), {} );
+
+            THEN( "it is refused, in a warning that names the configuration holding the port" )
+            {
+                REQUIRE( problem
+                         == "Serial capture not started for " + device.devicePath()
+                                + ": the port is already being captured by “board”; stop it "
+                                  "first." );
+                REQUIRE( host.notifications == QStringList{ problem } );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( sessions.isRunning( "board" ) );
+                REQUIRE_FALSE( sessions.isRunning( "console" ) );
+            }
+
+            THEN( "a tile of \"console\" says the same of the port" )
+            {
+                REQUIRE( sessions.portInUse( device.devicePath() )
+                         == device.devicePath() + " is in use by “board”" );
+            }
+        }
+
+        WHEN( "\"board\" itself is started again" )
+        {
+            const auto problem = sessions.start(
+                profileFor( "board", device.devicePath(), logDir.path() ), Defaults(), {} );
+
+            THEN( "it is refused, and its capture goes on" )
+            {
+                REQUIRE( problem.contains( "“board”" ) );
+                REQUIRE( host.notifications == QStringList{ problem } );
+                REQUIRE( sessions.isRunning( "board" ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+#endif
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a configuration's capture is set up from it and the defaults", "[sessions][start]" )
+{
+    GIVEN( "a configuration with every setting off its default, and a size limit of 5 MiB" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        auto profile = profileFor( "board", device.devicePath(), logDir.path() );
+        profile.serial.baudRate = 9600;
+        profile.serial.dataBits = QSerialPort::Data7;
+        profile.serial.parity = QSerialPort::EvenParity;
+        profile.serial.stopBits = QSerialPort::TwoStop;
+        profile.serial.maxFileBytes = 1; // not saved: the defaults' is used
+        Defaults defaults;
+        defaults.maxFileMiB = 5;
+
+        WHEN( "it is started" )
+        {
+            const auto problem = sessions.start( profile, defaults, {} );
+
+            THEN( "its capture has its settings, and the size limit of the defaults" )
+            {
+                REQUIRE( problem.isEmpty() );
+                const auto* capture = sessions.captureOf( "board" );
+                REQUIRE( capture );
+                const auto& config = capture->config();
+                REQUIRE( config.portName == device.devicePath() );
+                REQUIRE( config.baudRate == 9600 );
+                REQUIRE( config.dataBits == QSerialPort::Data7 );
+                REQUIRE( config.parity == QSerialPort::EvenParity );
+                REQUIRE( config.stopBits == QSerialPort::TwoStop );
+                REQUIRE_FALSE( config.timestamps );
+                REQUIRE( config.maxFileBytes == 5 * 1024 * 1024 );
+            }
+
+            THEN( "the user is told it started, once" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith( "Serial capture started for "
+                                                                + device.devicePath() ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a configuration's capture goes to its log directory", "[sessions][start]" )
+{
+    GIVEN( "a device, and a directory for the default log directory" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        QTemporaryDir root;
+        const auto defaultLogDir = root.filePath( "config/logs" );
+
+        WHEN( "its configuration has a log directory that does not exist yet" )
+        {
+            const auto logDir = root.filePath( "captures" );
+            REQUIRE( sessions
+                         .start( profileFor( "board", device.devicePath(), logDir ), Defaults(),
+                                 defaultLogDir )
+                         .isEmpty() );
+
+            THEN( "the directory is created, and a new file there is followed in a tab" )
+            {
+                REQUIRE( QFileInfo( logDir ).isDir() );
+                REQUIRE( host.followedFiles.size() == 1 );
+                const QFileInfo file( host.followedFiles.first() );
+                REQUIRE( file.absolutePath() == logDir );
+                REQUIRE( file.fileName().endsWith(
+                    "_" + QString( device.devicePath() ).replace( '/', '_' ) + ".log" ) );
+                REQUIRE( file.exists() );
+                REQUIRE_FALSE( QFileInfo::exists( defaultLogDir ) );
+            }
+        }
+
+        WHEN( "its configuration has no log directory" )
+        {
+            REQUIRE(
+                sessions
+                    .start( profileFor( "board", device.devicePath() ), Defaults(), defaultLogDir )
+                    .isEmpty() );
+
+            THEN( "the capture goes to the default log directory, created" )
+            {
+                REQUIRE( host.followedFiles.size() == 1 );
+                REQUIRE( QFileInfo( host.followedFiles.first() ).absolutePath() == defaultLogDir );
+            }
+        }
+
+        WHEN( "there is no log directory at all" )
+        {
+            REQUIRE( sessions.start( profileFor( "board", device.devicePath() ), Defaults(), {} )
+                         .isEmpty() );
+
+            THEN( "the capture goes to a temporary file below the host's temporary root" )
+            {
+                REQUIRE( host.followedFiles.size() == 1 );
+                REQUIRE( host.followedFiles.first().startsWith( host.tempRoot() + "/" ) );
+            }
+        }
+
+        WHEN( "its log directory is in the home directory, spelled with ~" )
+        {
+            const auto oldHome = qgetenv( "HOME" );
+            qputenv( "HOME", QFile::encodeName( root.path() ) );
+            const auto problem = sessions.start(
+                profileFor( "board", device.devicePath(), "~/serial" ), Defaults(), {} );
+            qputenv( "HOME", oldHome );
+
+            THEN( "the capture goes there, and the tab opens its full path" )
+            {
+                REQUIRE( problem.isEmpty() );
+                REQUIRE( host.followedFiles.size() == 1 );
+                REQUIRE( QFileInfo( host.followedFiles.first() ).absolutePath()
+                         == root.filePath( "serial" ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "two configurations never write to one file", "[sessions][start]" )
+{
+    GIVEN( "two configurations on two devices, with one log directory" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal firstDevice;
+        serial_test::PseudoTerminal secondDevice;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        const auto board = profileFor( "board", firstDevice.devicePath(), logDir.path() );
+        const auto console = profileFor( "console", secondDevice.devicePath(), logDir.path() );
+
+        WHEN( "both are started at once" )
+        {
+            REQUIRE( sessions.start( board, Defaults(), {} ).isEmpty() );
+            REQUIRE( sessions.start( console, Defaults(), {} ).isEmpty() );
+
+            THEN( "each writes to a file of its own there" )
+            {
+                REQUIRE( host.followedFiles.size() == 2 );
+                REQUIRE( host.followedFiles.at( 0 ) != host.followedFiles.at( 1 ) );
+                REQUIRE( sessions.captureOf( "board" )->tempFilePath()
+                         != sessions.captureOf( "console" )->tempFilePath() );
+            }
+        }
+
+        WHEN( "one is started, stopped and started again within a second" )
+        {
+            REQUIRE( sessions.start( board, Defaults(), {} ).isEmpty() );
+            REQUIRE( firstDevice.send( "first\n" ) );
+            REQUIRE( waitFor(
+                [ &sessions ] { return sessions.captureOf( "board" )->totalLineCount() == 1; } ) );
+            sessions.stop( "board" );
+            REQUIRE( sessions.start( board, Defaults(), {} ).isEmpty() );
+
+            THEN( "the second capture is a new file, and the first keeps its lines" )
+            {
+                REQUIRE( host.followedFiles.size() == 2 );
+                REQUIRE( host.followedFiles.at( 0 ) != host.followedFiles.at( 1 ) );
+                QFile first( host.followedFiles.at( 0 ) );
+                REQUIRE( first.open( QIODevice::ReadOnly ) );
+                REQUIRE( first.readAll() == "first\n" );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+// As in "an unplugged device ends its session": the port reports the error.
+SCENARIO( "the ports are scanned again after a device is unplugged", "[sessions][ports]" )
+{
+    GIVEN( "a configuration capturing a device" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        REQUIRE( sessions.start( profileFor( "board", device.devicePath() ), Defaults(), {} )
+                     .isEmpty() );
+        int changes = 0;
+        QObject::connect( &sessions, &Sessions::portsChanged, [ &changes ] { ++changes; } );
+        const auto scansBefore = host.logs.filter( "Discovered" ).size();
+
+        WHEN( "its device is unplugged" )
+        {
+            serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                          QSerialPort::ResourceError );
+            REQUIRE( waitFor( [ &sessions ] { return !sessions.isRunning( "board" ); } ) );
+
+            THEN( "the ports are enumerated once more, and the new list announced" )
+            {
+                REQUIRE( host.logs.filter( "Discovered" ).size() == scansBefore + 1 );
+                REQUIRE( changes == 1 );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+#endif
 
 SCENARIO( "a session is only accepted when its port opens", "[sessions]" )
 {
     GIVEN( "a port that does not exist" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         const QString port = "logsquirl-test-no-such-port";
 
@@ -90,61 +489,12 @@ SCENARIO( "a session is only accepted when its port opens", "[sessions]" )
         }
     }
 
-    GIVEN( "a save path that is not a full path" )
-    {
-        FakeHost host;
-        Sessions sessions;
-        const QString port = "logsquirl-test-no-such-port";
-
-        WHEN( "starting a session with it" )
-        {
-            const auto started = sessions.startSession( configFor( port ), "relative-capture.log" );
-
-            THEN( "the session is rejected before anything is written, and the user told why" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "not a full path" ) );
-            }
-        }
-    }
-
 #ifdef Q_OS_UNIX
-    GIVEN( "a device and a save path in the home directory, spelled with ~" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        Sessions sessions;
-        QTemporaryDir home;
-        const auto oldHome = qgetenv( "HOME" );
-        qputenv( "HOME", QFile::encodeName( home.path() ) );
-
-        WHEN( "starting a session" )
-        {
-            const auto started
-                = sessions.startSession( configFor( device.devicePath() ), "~/serial/capture.log" );
-            qputenv( "HOME", oldHome );
-            sessions.stopAll();
-
-            THEN( "the capture goes to the home directory, and the tab opens its full path" )
-            {
-                const auto expected = QDir( home.path() ).filePath( "serial/capture.log" );
-                REQUIRE( started );
-                REQUIRE( QFileInfo::exists( expected ) );
-                REQUIRE( host.openedFiles == QStringList{ expected } );
-            }
-        }
-
-        qputenv( "HOME", oldHome );
-    }
-
     GIVEN( "a device on a working port" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
 
         WHEN( "starting a session" )
@@ -173,7 +523,7 @@ SCENARIO( "two sessions never write to the same file", "[sessions]" )
         FakeHost host;
         serial_test::PseudoTerminal firstDevice;
         serial_test::PseudoTerminal secondDevice;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
         REQUIRE( sessions.startSession( configFor( firstDevice.devicePath() ), savePath ) );
@@ -192,6 +542,22 @@ SCENARIO( "two sessions never write to the same file", "[sessions]" )
             }
         }
 
+        WHEN( "starting a second port with the same save path, written from ~" )
+        {
+            const auto home = qgetenv( "HOME" );
+            qputenv( "HOME", logDir.path().toUtf8() );
+            const auto started
+                = sessions.startSession( configFor( secondDevice.devicePath() ), "~/capture.log" );
+            qputenv( "HOME", home );
+
+            THEN( "it is refused as well: ~ is expanded before the paths are compared" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE_FALSE( sessions.isSessionActive( secondDevice.devicePath() ) );
+                REQUIRE( host.notifications.size() == 1 );
+            }
+        }
+
         sessions.stopAll();
     }
 
@@ -200,7 +566,7 @@ SCENARIO( "two sessions never write to the same file", "[sessions]" )
         FakeHost host;
         serial_test::PseudoTerminal firstDevice;
         serial_test::PseudoTerminal secondDevice;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
         REQUIRE( sessions.startSession( configFor( firstDevice.devicePath() ), savePath ) );
@@ -246,7 +612,7 @@ SCENARIO( "a failed rotation is reported once", "[sessions]" )
 
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         REQUIRE( sessions.startSession( configFor( device.devicePath() ),
                                         logDir.filePath( "capture.log" ) ) );
@@ -280,7 +646,7 @@ SCENARIO( "a capture that reaches its size limit goes on in a new tab", "[sessio
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
         cfg.timestamps = false; // keep the file content predictable
@@ -323,7 +689,7 @@ SCENARIO( "stopAll keeps temporary log files for their tabs", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        auto* sessions = new Sessions;
+        auto* sessions = new Sessions( host );
         REQUIRE( sessions->startSession( configFor( device.devicePath() ) ) );
         REQUIRE( host.openedFiles.size() == 1 );
         const auto tempFile = host.openedFiles.first();
@@ -351,7 +717,7 @@ SCENARIO( "stopAll keeps temporary log files for their tabs", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        auto* sessions = new Sessions;
+        auto* sessions = new Sessions( host );
         REQUIRE( sessions->startSession( configFor( device.devicePath() ) ) );
         sessions->rotateSession( device.devicePath() );
         REQUIRE( host.openedFiles.size() == 2 );
@@ -376,15 +742,15 @@ SCENARIO( "stopAll keeps temporary log files for their tabs", "[sessions]" )
 #ifdef Q_OS_UNIX
 // A pseudo-terminal cannot be unplugged: QSerialPort does not notice when
 // its other side closes.  A real USB adapter that is pulled makes the port
-// report QSerialPort::ResourceError, so the test delivers that error to
-// the session's handler directly.
+// report QSerialPort::ResourceError, so the test has the session's port
+// report it (porterror.h).
 SCENARIO( "an unplugged device ends its session", "[sessions]" )
 {
     GIVEN( "a running session" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
         REQUIRE( session );
@@ -393,9 +759,7 @@ SCENARIO( "an unplugged device ends its session", "[sessions]" )
         WHEN( "the port reports that the device is gone, twice" )
         {
             for ( int i = 0; i < 2; ++i ) {
-                QMetaObject::invokeMethod(
-                    session, "onPortError",
-                    Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+                serial_test::reportPortError( session, QSerialPort::ResourceError );
             }
 
             THEN( "the session is removed" )
@@ -427,14 +791,13 @@ SCENARIO( "any error of an open port ends its session, with one notification", "
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
         REQUIRE( session );
         host.notifications.clear();
         const auto reportError = [ session ]( QSerialPort::SerialPortError error ) {
-            QMetaObject::invokeMethod( session, "onPortError",
-                                       Q_ARG( QSerialPort::SerialPortError, error ) );
+            serial_test::reportPortError( session, error );
         };
 
         WHEN( "the port reports a ReadError, again and again, then an UnknownError" )
@@ -491,7 +854,7 @@ SCENARIO( "a log file that cannot be written ends its session", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         REQUIRE( sessions.startSession( configFor( device.devicePath() ),
                                         logDir.filePath( "capture.log" ) ) );
@@ -526,7 +889,7 @@ SCENARIO( "starting and stopping a session does not rescan the ports", "[session
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
         REQUIRE( scansBefore == 1 );
 
@@ -551,7 +914,7 @@ SCENARIO( "the port list is rescanned on request", "[sessions]" )
     GIVEN( "the sessions" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         int changes = 0;
         QObject::connect( &sessions, &Sessions::portsChanged, [ &changes ]() { ++changes; } );
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
@@ -602,7 +965,7 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
     GIVEN( "the sessions and a port that does not exist" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         SessionEvents recorded( sessions );
 
         WHEN( "a session cannot start" )
@@ -622,7 +985,7 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
         FakeHost host;
         serial_test::PseudoTerminal first;
         serial_test::PseudoTerminal second;
-        Sessions sessions;
+        Sessions sessions( host );
         SessionEvents recorded( sessions );
         const auto firstPort = first.devicePath();
         const auto secondPort = second.devicePath();
@@ -663,11 +1026,8 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
             AND_WHEN( "its device is unplugged" )
             {
                 recorded.events.clear();
-                auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
-                REQUIRE( session );
-                QMetaObject::invokeMethod(
-                    session, "onPortError",
-                    Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+                serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                              QSerialPort::ResourceError );
 
                 THEN( "its end is announced, once" )
                 {
@@ -702,7 +1062,7 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
         REQUIRE( sessions.startSession( cfg ) );
@@ -732,7 +1092,7 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         auto cfg = configFor( device.devicePath() );
         cfg.timestamps = false;
         REQUIRE( sessions.startSession( cfg ) );
@@ -770,7 +1130,7 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
     GIVEN( "a port without a session" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
 
         THEN( "there is no session to read" )
         {
@@ -779,30 +1139,42 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
     }
 }
 
-SCENARIO( "a session remembers the configuration that started it", "[sessions]" )
+SCENARIO( "a session remembers the configuration that started it", "[sessions][byname]" )
 {
     GIVEN( "a session started by the configuration \"board\"" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
 
-        THEN( "its port knows the configuration, and the configuration its port" )
+        THEN( "the configuration runs, its capture is the port's, and its port says by whom" )
         {
-            REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
-            REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
-            REQUIRE( sessions.portOf( "other" ).isEmpty() );
+            REQUIRE( sessions.isRunning( "board" ) );
+            REQUIRE_FALSE( sessions.isRunning( "other" ) );
+            REQUIRE_FALSE( sessions.isRunning( {} ) );
+            REQUIRE( sessions.captureOf( "board" ) == sessions.session( device.devicePath() ) );
+            REQUIRE( sessions.captureOf( "other" ) == nullptr );
+            REQUIRE( sessions.portInUse( device.devicePath() )
+                     == device.devicePath() + " is in use by “board”" );
+        }
+
+        THEN( "the store's check asks the same" )
+        {
+            const auto isRunning = sessions.runningCheck();
+            REQUIRE( isRunning( "board" ) );
+            REQUIRE_FALSE( isRunning( "other" ) );
         }
 
         WHEN( "it is stopped" )
         {
             sessions.stopSession( device.devicePath() );
 
-            THEN( "neither is remembered any more" )
+            THEN( "it is not remembered any more" )
             {
-                REQUIRE( sessions.ownerOf( device.devicePath() ).isEmpty() );
-                REQUIRE( sessions.portOf( "board" ).isEmpty() );
+                REQUIRE_FALSE( sessions.isRunning( "board" ) );
+                REQUIRE( sessions.captureOf( "board" ) == nullptr );
+                REQUIRE( sessions.portInUse( device.devicePath() ).isEmpty() );
             }
         }
 
@@ -810,21 +1182,208 @@ SCENARIO( "a session remembers the configuration that started it", "[sessions]" 
         {
             // As in "an unplugged device ends its session": a pseudo-terminal
             // cannot be unplugged, so the port reports the error itself.
-            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
-            REQUIRE( session );
-            QMetaObject::invokeMethod(
-                session, "onPortError",
-                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+            serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                          QSerialPort::ResourceError );
 
-            THEN( "neither is remembered any more" )
+            THEN( "it is not remembered any more" )
             {
-                REQUIRE(
-                    waitFor( [ &sessions ]() { return sessions.portOf( "board" ).isEmpty(); } ) );
-                REQUIRE( sessions.ownerOf( device.devicePath() ).isEmpty() );
+                REQUIRE( waitFor( [ &sessions ]() { return !sessions.isRunning( "board" ); } ) );
+                REQUIRE( sessions.captureOf( "board" ) == nullptr );
+                REQUIRE( sessions.portInUse( device.devicePath() ).isEmpty() );
             }
         }
 
         sessions.stopAll();
+    }
+
+    GIVEN( "a session started without a configuration" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
+
+        THEN( "no configuration runs, and its port is in use by another capture" )
+        {
+            REQUIRE_FALSE( sessions.isRunning( {} ) );
+            REQUIRE( sessions.captureOf( {} ) == nullptr );
+            REQUIRE( sessions.portInUse( device.devicePath() )
+                     == device.devicePath() + " is in use by another capture" );
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a configuration's capture is stopped, rotated and sent to by its name",
+          "[sessions][byname]" )
+{
+    GIVEN( "the configuration \"board\" capturing a device, and \"console\" another" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        serial_test::PseudoTerminal otherDevice;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        auto config = configFor( device.devicePath() );
+        config.timestamps = false;
+        REQUIRE( sessions.startSession( config, logDir.filePath( "board.log" ), "board" ) );
+        REQUIRE( sessions.startSession( configFor( otherDevice.devicePath() ),
+                                        logDir.filePath( "console.log" ), "console" ) );
+        host.notifications.clear();
+        host.followedFiles.clear();
+
+        WHEN( "\"board\" is sent a command" )
+        {
+            const auto sent = sessions.send( "board", "status", serial_monitor::TxLineEnding::LF );
+
+            THEN( "its device receives it, and its log has it" )
+            {
+                REQUIRE( sent );
+                QByteArray received;
+                REQUIRE( waitFor( [ &device, &received ]() {
+                    received += device.receive();
+                    return received == "status\n";
+                } ) );
+                REQUIRE( waitFor( [ &sessions ]() {
+                    return sessions.captureOf( "board" )->totalLineCount() == 1;
+                } ) );
+            }
+        }
+
+        WHEN( "\"board\" is rotated" )
+        {
+            sessions.rotate( "board" );
+
+            THEN( "its capture goes on in a new file, the other's does not" )
+            {
+                REQUIRE( host.followedFiles.size() == 1 );
+                REQUIRE( sessions.captureOf( "board" )->rotationCount() == 1 );
+                REQUIRE( sessions.captureOf( "console" )->rotationCount() == 0 );
+            }
+        }
+
+        WHEN( "\"board\" is stopped" )
+        {
+            sessions.stop( "board" );
+
+            THEN( "its capture ends, the other's goes on" )
+            {
+                REQUIRE_FALSE( sessions.isRunning( "board" ) );
+                REQUIRE_FALSE( sessions.isSessionActive( device.devicePath() ) );
+                REQUIRE( sessions.isRunning( "console" ) );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith( "Serial capture stopped for "
+                                                                + device.devicePath() ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a configuration that does not capture is stopped, rotated and sent to quietly",
+          "[sessions][byname]" )
+{
+    GIVEN( "the configuration \"board\", whose capture has just ended" )
+    {
+        // Stopped, or ended on its own (its device unplugged).
+        const bool unplugged = GENERATE( false, true );
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ),
+                                        logDir.filePath( "board.log" ), "board" ) );
+        int stopped = 0;
+        int changed = 0;
+        QObject::connect( &sessions, &Sessions::sessionStopped,
+                          [ &stopped ]( const QString& ) { ++stopped; } );
+        QObject::connect( &sessions, &Sessions::sessionChanged,
+                          [ &changed ]( const QString& ) { ++changed; } );
+
+        if ( !unplugged ) {
+            sessions.stop( "board" );
+        }
+        else {
+            serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                          QSerialPort::ResourceError );
+            REQUIRE( waitFor( [ &sessions ]() { return !sessions.isRunning( "board" ); } ) );
+        }
+
+        REQUIRE( stopped == 1 );
+        stopped = 0;
+        host.logs.clear();
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        THEN( "stopping, rotating and sending it do nothing, and tell nothing" )
+        {
+            sessions.stop( "board" );
+            sessions.rotate( "board" );
+            REQUIRE_FALSE( sessions.send( "board", "status", serial_monitor::TxLineEnding::LF ) );
+
+            REQUIRE( host.logs.isEmpty() );
+            REQUIRE( host.notifications.isEmpty() );
+            REQUIRE( host.openedFiles.isEmpty() );
+            REQUIRE( stopped == 0 );
+            REQUIRE( changed == 0 );
+            REQUIRE( sessions.captureOf( "board" ) == nullptr );
+        }
+
+        sessions.stopAll();
+    }
+
+    GIVEN( "a port captured by \"board\", and the configuration \"console\" on it, stopped" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
+        host.logs.clear();
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        WHEN( "\"console\" is stopped, rotated and sent to" )
+        {
+            sessions.stop( "console" );
+            sessions.rotate( "console" );
+            const auto sent
+                = sessions.send( "console", "status", serial_monitor::TxLineEnding::LF );
+
+            THEN( "the capture of \"board\" goes on untouched, and nothing is told" )
+            {
+                REQUIRE_FALSE( sent );
+                REQUIRE( sessions.isRunning( "board" ) );
+                REQUIRE( sessions.captureOf( "board" )->rotationCount() == 0 );
+                REQUIRE( host.logs.isEmpty() );
+                REQUIRE( host.notifications.isEmpty() );
+                REQUIRE( host.openedFiles.isEmpty() );
+            }
+        }
+
+        sessions.stopAll();
+    }
+
+    GIVEN( "no capture at all" )
+    {
+        FakeHost host;
+        Sessions sessions( host );
+        host.logs.clear();
+
+        THEN( "stopping, rotating and sending a configuration, or none, tell nothing" )
+        {
+            for ( const QString& name : { QString( "board" ), QString() } ) {
+                sessions.stop( name );
+                sessions.rotate( name );
+                REQUIRE_FALSE( sessions.send( name, "status", serial_monitor::TxLineEnding::LF ) );
+                REQUIRE( sessions.captureOf( name ) == nullptr );
+                REQUIRE_FALSE( sessions.isRunning( name ) );
+            }
+            REQUIRE( host.logs.isEmpty() );
+            REQUIRE( host.notifications.isEmpty() );
+            REQUIRE( sessions.portInUse( "logsquirl-test-no-such-port" ).isEmpty() );
+        }
     }
 }
 
@@ -834,7 +1393,7 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
         host.notifications.clear();
         host.openedFiles.clear();
@@ -851,7 +1410,8 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( device.devicePath() ) );
                 REQUIRE( host.notifications.first().contains( "board" ) );
-                REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
+                REQUIRE( sessions.isRunning( "board" ) );
+                REQUIRE_FALSE( sessions.isRunning( "console" ) );
             }
         }
 
@@ -862,7 +1422,7 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         host.notifications.clear();
 
@@ -891,7 +1451,7 @@ SCENARIO( "an exception in what a session reports does not escape", "[sessions][
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
         REQUIRE( session );
@@ -941,3 +1501,123 @@ SCENARIO( "an exception in what a session reports does not escape", "[sessions][
     }
 }
 #endif
+
+// Every refusal is a Host::warn(): one log entry, as a warning, and one
+// notification, with the same text.  An error a session reports is one log
+// entry, as an error, and one notification.
+SCENARIO( "the sessions tell the host they are handed, once each", "[sessions][host]" )
+{
+    GIVEN( "sessions on a fake host, after the port scan" )
+    {
+        FakeHost host;
+        Sessions sessions( host );
+
+        THEN( "the scan is logged, and nothing is notified" )
+        {
+            REQUIRE( host.logs.filter( "Discovered" ).size() == 1 );
+            REQUIRE( host.notifications.isEmpty() );
+        }
+
+        host.logs.clear();
+        host.logLevels.clear();
+
+        WHEN( "a configuration with an invalid baud rate is refused" )
+        {
+            auto profile = profileFor( "board", kMissingPort );
+            profile.serial.baudRate = 0;
+            REQUIRE_FALSE( sessions.start( profile, Defaults(), {} ).isEmpty() );
+
+            THEN( "the host logs one warning and shows one notification, saying the same" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "baud rate" ) );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
+        }
+
+        WHEN( "a session whose port does not open is refused" )
+        {
+            REQUIRE_FALSE( sessions.startSession( configFor( "logsquirl-test-no-such-port" ) ) );
+
+            THEN( "the host logs one error and shows one notification, both naming the port" )
+            {
+                REQUIRE( host.logs.size() == 1 );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_ERROR } );
+                REQUIRE( host.logs.first().startsWith( "logsquirl-test-no-such-port: " ) );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith(
+                    "Serial error (logsquirl-test-no-such-port): " ) );
+                REQUIRE( host.openedFiles.isEmpty() );
+            }
+        }
+    }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "a running session on a fake host" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        serial_test::PseudoTerminal otherDevice;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ), savePath, "board" ) );
+
+        THEN( "its start opens one followed tab and is one notification" )
+        {
+            REQUIRE( host.followedFiles == QStringList{ savePath } );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().startsWith( "Serial capture started for" ) );
+        }
+
+        host.logs.clear();
+        host.logLevels.clear();
+        host.notifications.clear();
+
+        WHEN( "its port is started again, by another configuration" )
+        {
+            REQUIRE_FALSE( sessions
+                               .start( profileFor( "console", device.devicePath() ), Defaults(),
+                                       logDir.path() )
+                               .isEmpty() );
+
+            THEN( "the host logs one warning and shows one notification naming the owner" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "“board”" ) );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
+        }
+
+        WHEN( "another port is started on its save path" )
+        {
+            REQUIRE_FALSE(
+                sessions.startSession( configFor( otherDevice.devicePath() ), savePath ) );
+
+            THEN( "the host logs one warning and shows one notification, saying the same" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "already writing to" ) );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
+        }
+
+        WHEN( "it is stopped" )
+        {
+            sessions.stopSession( device.devicePath() );
+
+            THEN( "the host shows one notification, and logs the port closed" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith( "Serial capture stopped for" ) );
+                REQUIRE( host.logs.filter( "Closed " + device.devicePath() ).size() == 1 );
+            }
+        }
+
+        sessions.stopAll();
+    }
+#endif
+}

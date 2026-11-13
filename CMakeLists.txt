@@ -37,6 +37,8 @@ qt_standard_project_setup()
 # ── Plugin shared library ─────────────────────────────────────────────────
 add_library(logsquirl_serial SHARED
     src/plugin.cpp
+    src/host.cpp
+    src/capturelog.cpp
     src/serialprocess.cpp
     src/tempdirs.cpp
     src/sessions.cpp

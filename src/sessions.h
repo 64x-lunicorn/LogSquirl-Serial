@@ -30,10 +30,16 @@
  * scan, which every view shares.
  *
  * The sidebar (SidebarWidget) and its tiles are views of it: a tile starts
- * the session of its saved configuration (profiles.h), named as the
- * session's owner, and finds it again through portOf().  The views call
- * its methods and update on its signals.  Starting,
- * stopping and errors are host notifications, sent from here; stopAll()
+ * the capture of its saved configuration (profiles.h) in one call,
+ * start(), which checks the configuration, sets the capture up from it and
+ * the defaults, picks its log file and refuses a busy port; the tile then
+ * stops, rotates, sends to and reads it by the configuration's name
+ * (stop(), rotate(), send(), captureOf()), which do nothing once it has
+ * ended.  The profile store asks it whether a configuration captures
+ * (runningCheck()), the dialog which ports there are (ports()).  The views
+ * call its methods and update on its signals.
+ * Starting, stopping and errors are notifications of the Host it is handed (host.h),
+ * sent from here; a refusal is a Host::warn(), logged and notified; stopAll()
  * notifies nothing (the views say "All serial sessions stopped.", the
  * shutdown says nothing).
  *
@@ -42,14 +48,15 @@
  *
  * OWNERSHIP
  * ─────────
- * Created by logsquirl_plugin_init(), deleted by logsquirl_plugin_shutdown()
- * after stopAll() and after the views.  The running SerialProcesses are its
+ * A member of the plugin instance (plugin.cpp): destroyed after stopAll() and
+ * after the store and the views that use it.  The running SerialProcesses are its
  * children: deleting it with sessions still running stops them without a
  * signal, and removes the temporary files of those not preserved.
  */
 
 #pragma once
 
+#include "profiles.h"
 #include "serialprocess.h"
 
 #include <QMap>
@@ -63,21 +70,60 @@ class Sessions : public QObject {
     Q_OBJECT
 
 public:
-    /** Scans the ports once (ports()), without emitting portsChanged(). */
-    explicit Sessions( QObject* parent = nullptr );
+    /**
+     * Scans the ports once (ports()), without emitting portsChanged().
+     * Everything it and its sessions tell LogSquirl goes through @p host,
+     * which must outlive it.
+     */
+    explicit Sessions( Host& host, QObject* parent = nullptr );
     ~Sessions() override = default;
 
     /**
-     * Start capture for config.portName and open its log file in a
-     * followed tab.  Refused, with a host notification saying why, if the
-     * port has a session already (naming the configuration that started
-     * it), the baud rate is not one, the port cannot be opened, or another
-     * session writes to @p savePath.  sessionStarted() follows a session
-     * that started.
+     * What keeps @p profile from starting a capture, in words for the user:
+     * no port, no baud rate, or a log directory that is not a full path;
+     * empty if nothing (whether its port and its log file open shows at
+     * start()).  The dialog saves no configuration that it refuses.
+     */
+    static QString startProblem( const PortProfile& profile );
+
+    /**
+     * Start a capture of the saved configuration @p profile, as its owner
+     * (the calls by configuration name below find it by its name until it
+     * ends), and open its log file in a followed tab.
      *
-     * @param savePath  Optional path to a .log file for persistent saving.
+     * The capture has the settings of @p profile, with the size limit of
+     * @p defaults (ProfileStore::defaults()).  It writes to a new file,
+     * YYYY-MM-dd_HHmmss_<port>.log, in the profile's log directory, or in
+     * @p defaultLogDir (ProfileStore::defaultLogDir()) when it has none,
+     * created if it does not exist; to a temporary file when both are empty.
+     *
+     * Refused when startProblem() says why, when the port has a capture
+     * already (naming the configuration that holds it), when another capture
+     * writes to the file, or when the port or the file does not open.  The
+     * host has been told each refusal once: a Host::warn(), or, for a port
+     * or file that does not open, the error the capture reports (logged as
+     * an error, and notified).  sessionStarted() follows a capture that
+     * started.
+     *
+     * @return Why it was refused, as the user was notified; empty if it
+     *         started.
+     */
+    QString start( const PortProfile& profile, const Defaults& defaults,
+                   const QString& defaultLogDir );
+
+    /**
+     * Start capture for config.portName with @p config as it is, and open
+     * its log file in a followed tab: start() without a saved configuration
+     * to check and derive it from.  Refused, as start() is, if the port has
+     * a session already, another session writes to @p savePath, or the port
+     * or the file does not open.  sessionStarted() follows a session that
+     * started.
+     *
+     * @param savePath  Optional full path to a .log file for persistent
+     *                  saving; empty for a temporary file.
      * @param owner     The saved configuration that starts it (profiles.h),
-     *                  if any: ownerOf() and portOf() tell it until it ends.
+     *                  if any: the calls by configuration name below find
+     *                  the session through it until it ends.
      * @return Whether the session started.
      */
     bool startSession( const SerialConfig& config, const QString& savePath = {},
@@ -129,20 +175,50 @@ public:
      */
     const SerialProcess* session( const QString& portName ) const;
 
-    /**
-     * The saved configuration whose session runs on @p portName (the owner
-     * given to startSession()); empty if the port has no session, or one
-     * started without a configuration.
-     */
-    QString ownerOf( const QString& portName ) const;
+    // ── By configuration ────────────────────────────────────────────────
+    //
+    // A saved configuration (profiles.h) knows its capture by its name, the
+    // owner given to startSession(), not by the port saved in it, which may
+    // have been edited since.  For a name that captures nothing (never
+    // started, stopped, ended on its own, or empty) each of these does
+    // nothing and tells nothing.
+
+    /** Whether the saved configuration @p name captures. */
+    bool isRunning( const QString& name ) const;
 
     /**
-     * The port of the session that the saved configuration @p owner
-     * started; empty if it runs none.  A tile finds its session this way,
-     * not through the port saved in its configuration, which may have been
-     * edited since.
+     * isRunning() as the profile store asks it before a rename or delete
+     * (ProfileStore::IsRunning); valid while this object lives.
      */
-    QString portOf( const QString& owner ) const;
+    ProfileStore::IsRunning runningCheck() const;
+
+    /** Stop the capture of the configuration @p name, as stopSession(). */
+    void stop( const QString& name );
+
+    /** Rotate the log of the configuration @p name's capture, as rotateSession(). */
+    void rotate( const QString& name );
+
+    /**
+     * Send @p data with @p lineEnding to the capture of the configuration
+     * @p name, as sendToSession().
+     *
+     * @return Whether it was sent; false if @p name captures nothing.
+     */
+    bool send( const QString& name, const QByteArray& data, TxLineEnding lineEnding );
+
+    /**
+     * The capture of the configuration @p name, to read its counters and
+     * settings, or nullptr if it runs none.  Valid until sessionStopped()
+     * for its port.
+     */
+    const SerialProcess* captureOf( const QString& name ) const;
+
+    /**
+     * Why @p portName cannot be captured now, as a tile shows it: "<port>
+     * is in use by “board”", or "… by another capture" for a session
+     * started without a configuration; empty if it has no session.
+     */
+    QString portInUse( const QString& portName ) const;
 
     /** Names of the ports found by the most recent scan. */
     const QStringList& ports() const
@@ -176,6 +252,15 @@ Q_SIGNALS:
     void portsChanged();
 
 private:
+    /**
+     * startSession(), saying why it was refused: as the user was notified;
+     * empty if it started.
+     */
+    QString launch( const SerialConfig& config, const QString& savePath, const QString& owner );
+
+    /** Tell the user why a capture is not started (Host::warn()), and return it. */
+    QString refuse( const QString& message );
+
     /** Rotate @p portName's log and open the new file; tell the user @p notification. */
     void rotateLogOf( const QString& portName, SerialProcess::PartialLine partialLine,
                       const QString& notification );
@@ -201,6 +286,13 @@ private:
     /** Whether an active session writes to the file at @p path. */
     bool isFileInUse( const QString& path ) const;
 
+    /** Scan the ports, and log how many there are. */
+    QStringList scanPorts();
+
+    /** The port of the session the configuration @p name started; empty if none. */
+    QString portOf( const QString& name ) const;
+
+    Host& host_;
     QStringList ports_; ///< Result of the last port scan.
     QMap<QString, SerialProcess*> sessions_;
     QMap<QString, QString> owners_; ///< Port → the configuration that started its session.

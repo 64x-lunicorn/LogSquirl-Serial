@@ -138,7 +138,7 @@ PortDialog::PortDialog( ProfileStore* profiles, Sessions* sessions, QWidget* par
         QStringLiteral( "Add a [YYYY-MM-DD HH:mm:ss.zzz] prefix to each received line" ) );
 
     logDirEdit_->setObjectName( "logDir" );
-    const auto defaultDir = defaultLogDir();
+    const auto defaultDir = profiles_->defaultLogDir();
     const auto whenEmpty = defaultDir.isEmpty()
                                ? QStringLiteral( "temporary files, removed when LogSquirl quits" )
                                : QDir::toNativeSeparators( defaultDir );
@@ -316,7 +316,7 @@ void PortDialog::saveProfile()
         statusLabel_->setText( QStringLiteral( "Enter a name for the configuration to save." ) );
         return;
     }
-    if ( const auto problem = startProblem( profile ); !problem.isEmpty() ) {
+    if ( const auto problem = Sessions::startProblem( profile ); !problem.isEmpty() ) {
         statusLabel_->setText( problem );
         return;
     }
@@ -340,7 +340,7 @@ void PortDialog::saveProfile()
                                    .arg( renamed, profile.name ) );
         return;
     }
-    if ( !sessions_->portOf( profile.name ).isEmpty() ) {
+    if ( sessions_->isRunning( profile.name ) ) {
         statusLabel_->setText( QStringLiteral( "Configuration %1 saved. Its capture runs on with "
                                                "the settings it started with: stop and start it "
                                                "to use the new ones." )

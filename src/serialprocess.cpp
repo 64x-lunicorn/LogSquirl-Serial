@@ -26,93 +26,95 @@
  *   1. discoverPorts() enumerates serial ports via QSerialPortInfo and
  *      filters out Bluetooth and virtual entries.
  *
- *   2. start() opens the configured serial port with the given parameters
- *      (baud rate, data bits, stop bits, parity, flow control).
+ *   2. start() has the session's CaptureLog open the log file, then opens
+ *      the configured serial port with the given parameters (baud rate,
+ *      data bits, stop bits, parity, flow control).
  *
- *   3. Incoming data is read via the readyRead signal.  Each complete line
- *      is optionally timestamped and written to a temporary file.
+ *   3. Incoming data is read via the readyRead signal and handed to the
+ *      CaptureLog, which writes each complete line to the log file
+ *      (capturelog.h).
  *
- *   4. The host opens the temporary file with follow/tail mode, so lines
+ *   4. The host opens the log file with follow/tail mode, so lines
  *      appear in real-time as the serial device sends data.
  *
- *   5. stop() closes the serial port.
+ *   5. stop() closes the serial port, and the CaptureLog the file.
  */
 
 #include "serialprocess.h"
-#include "plugin.h"
-#include "tempdirs.h"
 
 #include <QDateTime>
-#include <QDir>
-#include <QFileInfo>
-#include <QRegularExpression>
-#include <QSettings>
 #include <QSignalBlocker>
-#include <QStandardPaths>
-
-#ifdef Q_OS_UNIX
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 namespace serial_monitor {
 
 namespace {
 
-/// Make a port name usable as part of a file name on every platform.
-QString safeFileName( const QString& portName )
-{
-    auto name = portName;
-    name.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
-    return name;
-}
-
-/**
- * The length of the longest start of @p data that does not end inside a
- * UTF-8 character: all of it, unless its last bytes begin a character
- * whose remaining bytes are still to come.  Bytes that are not UTF-8 count
- * as complete.
- */
-qsizetype completeUtf8Length( const QByteArray& data )
-{
-    const auto size = data.size();
-    // A character is at most four bytes: look at its first byte, at most
-    // three back from the end.
-    for ( qsizetype back = 1; back <= 3 && back <= size; ++back ) {
-        const auto byte = static_cast<unsigned char>( data.at( size - back ) );
-        if ( ( byte & 0xC0 ) == 0x80 ) {
-            continue; // a continuation byte
-        }
-        qsizetype length = 1;
-        if ( ( byte & 0xE0 ) == 0xC0 ) {
-            length = 2;
-        }
-        else if ( ( byte & 0xF0 ) == 0xE0 ) {
-            length = 3;
-        }
-        else if ( ( byte & 0xF8 ) == 0xF0 ) {
-            length = 4;
-        }
-        return length > back ? size - back : size;
-    }
-    return size;
-}
+/// What a read asks for at least: a device that cannot be read says so then.
+constexpr qint64 kMinReadSize = 4096;
 
 } // namespace
 
+QByteArray lineEndingBytes( TxLineEnding ending )
+{
+    switch ( ending ) {
+    case TxLineEnding::CR:
+        return QByteArrayLiteral( "\r" );
+    case TxLineEnding::LF:
+        return QByteArrayLiteral( "\n" );
+    case TxLineEnding::CRLF:
+        return QByteArrayLiteral( "\r\n" );
+    case TxLineEnding::None:
+        break;
+    }
+    return {};
+}
+
 // ── Construction / destruction ──────────────────────────────────────────
 
-SerialProcess::SerialProcess( const SerialConfig& config, const QString& savePath, QObject* parent )
+SerialProcess::SerialProcess( Host& host, const SerialConfig& config, const QString& savePath,
+                              QObject* parent )
+    : SerialProcess( host, config, savePath, std::make_unique<QSerialPort>(), parent )
+{
+}
+
+SerialProcess::SerialProcess( Host& host, const SerialConfig& config, const QString& savePath,
+                              std::unique_ptr<QIODevice> device, QObject* parent )
     : QObject( parent )
+    , host_( host )
     , config_( config )
     , savePath_( savePath )
-    , tempDir_( tempDirTemplate( tempRoot() ) )
+    , device_( device.release() )
+    , port_( qobject_cast<QSerialPort*>( device_ ) )
+    , log_( config.timestamps )
 {
-    connect( &port_, &QSerialPort::readyRead, this, &SerialProcess::onReadyRead );
-    connect( &port_, &QSerialPort::errorOccurred, this, &SerialProcess::onPortError );
+    device_->setParent( this );
+    // What the event loop runs goes through guarded(): an exception must not
+    // reach the host's event loop.
+    connect( device_, &QIODevice::readyRead, this, [ this ]() {
+        guarded( host_, "reading a serial port", [ this ] { onReadyRead(); } );
+    } );
+    if ( port_ ) {
+        connect( port_, &QSerialPort::errorOccurred, this,
+                 [ this ]( QSerialPort::SerialPortError error ) {
+                     guarded( host_, "handling a serial port error",
+                              [ this, error ] { onPortError( error ); } );
+                 } );
+    }
+
+    // From the event loop, not from within the slot that is reading the
+    // port; and not once the file has been rotated meanwhile.
+    log_.setSizeLimit( config_.maxFileBytes, [ this ]() {
+        QMetaObject::invokeMethod(
+            this,
+            [ this ]() {
+                guarded( host_, "reaching a serial capture's size limit", [ this ] {
+                    if ( log_.hasReachedSizeLimit() && isRunning() ) {
+                        Q_EMIT sizeLimitReached();
+                    }
+                } );
+            },
+            Qt::QueuedConnection );
+    } );
 }
 
 SerialProcess::~SerialProcess()
@@ -123,29 +125,16 @@ SerialProcess::~SerialProcess()
     blockSignals( true );
     stop();
 
-    // port_ is declared before the members its slots use, so it is
-    // destroyed after them; whatever it might still signal must not
-    // reach this object's slots.
-    port_.disconnect( this );
+    // The device is a child, destroyed after the members its handlers use;
+    // whatever it might still signal must not reach this object.
+    device_->disconnect( this );
 }
 
 // ── Static: port discovery ──────────────────────────────────────────────
 
-QString SerialProcess::configDir()
-{
-    if ( g_state.api && g_state.handle ) {
-        return QString::fromUtf8( g_state.api->get_config_dir( g_state.handle ) );
-    }
-    return QStandardPaths::writableLocation( QStandardPaths::TempLocation );
-}
-
 QStringList SerialProcess::discoverPorts()
 {
-    const auto allPorts = QSerialPortInfo::availablePorts();
-    const auto ports = filterPorts( allPorts );
-
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Discovered %1 serial port(s)." ).arg( ports.size() ) );
-    return ports;
+    return filterPorts( QSerialPortInfo::availablePorts() );
 }
 
 QStringList SerialProcess::filterPorts( const QList<QSerialPortInfo>& ports )
@@ -169,115 +158,6 @@ QStringList SerialProcess::filterPorts( const QList<QSerialPortInfo>& ports )
     return result;
 }
 
-QList<QByteArray> SerialProcess::takeLines( QByteArray& buffer, bool& afterCr,
-                                            qsizetype maxLineLength )
-{
-    QList<QByteArray> lines;
-    qsizetype start = 0;
-    // The CR that ended the previous data may be the first half of a CRLF
-    // whose LF arrives only now.  Its line has been taken already.
-    if ( afterCr && buffer.startsWith( '\n' ) ) {
-        start = 1;
-    }
-    if ( !buffer.isEmpty() ) {
-        afterCr = false;
-    }
-    for ( qsizetype i = start; i < buffer.size(); ++i ) {
-        const auto c = buffer.at( i );
-        if ( c != '\n' && c != '\r' ) {
-            continue;
-        }
-        lines.append( buffer.mid( start, i - start ) );
-        if ( c == '\r' ) {
-            if ( i + 1 == buffer.size() ) {
-                afterCr = true;
-            }
-            else if ( buffer.at( i + 1 ) == '\n' ) {
-                ++i;
-            }
-        }
-        start = i + 1;
-    }
-    buffer.remove( 0, start );
-
-    if ( buffer.size() > maxLineLength ) {
-        // A character cut in two would be garbled at the end of this line
-        // and the start of the next: its first bytes wait for the rest.
-        auto length = completeUtf8Length( buffer );
-        if ( length == 0 ) {
-            length = buffer.size();
-        }
-        lines.append( buffer.left( length ) );
-        buffer.remove( 0, length );
-    }
-    return lines;
-}
-
-QByteArray SerialProcess::escapeControls( const QByteArray& line )
-{
-    static constexpr char kHex[] = "0123456789ABCDEF";
-    QByteArray escaped;
-    escaped.reserve( line.size() );
-    for ( const char c : line ) {
-        const auto byte = static_cast<unsigned char>( c );
-        if ( byte < 0x20 && c != '\t' ) {
-            escaped.append( "\\x" );
-            escaped.append( kHex[ byte >> 4 ] );
-            escaped.append( kHex[ byte & 0x0F ] );
-        }
-        else {
-            escaped.append( c );
-        }
-    }
-    return escaped;
-}
-
-SerialConfig SerialProcess::defaultConfig()
-{
-    SerialConfig cfg;
-
-    // Load persisted defaults from config if available
-    const auto cfgDir = configDir();
-    if ( !cfgDir.isEmpty() ) {
-        QSettings settings( cfgDir + "/serial.ini", QSettings::IniFormat );
-        cfg.baudRate = settings.value( "serial/defaultBaud", 115200 ).toInt();
-        cfg.timestamps = settings.value( "serial/timestamps", true ).toBool();
-        const auto maxFileMiB = settings.value( "serial/maxFileMiB", kDefaultMaxFileMiB ).toInt();
-        cfg.maxFileBytes = qMax( 0, maxFileMiB ) * kBytesPerMiB;
-    }
-
-    return cfg;
-}
-
-QString SerialProcess::absoluteUserPath( const QString& path )
-{
-    auto expanded = path.trimmed();
-    if ( expanded == QStringLiteral( "~" ) ) {
-        expanded = QDir::homePath();
-    }
-    else if ( expanded.startsWith( QStringLiteral( "~/" ) )
-              || expanded.startsWith( QStringLiteral( "~\\" ) ) ) {
-        expanded = QDir::homePath() + expanded.mid( 1 );
-    }
-    if ( expanded.isEmpty() || QDir::isRelativePath( expanded ) ) {
-        return {};
-    }
-    return QDir::cleanPath( expanded );
-}
-
-QString SerialProcess::generateLogPath( const QString& dir, const QString& portName,
-                                        const QDateTime& timestamp )
-{
-    const QDir logDir( dir );
-    const auto stem = timestamp.toString( "yyyy-MM-dd_HHmmss" ) + "_" + safeFileName( portName );
-
-    auto path = logDir.filePath( stem + ".log" );
-    for ( int n = 2; QFileInfo::exists( path ); ++n ) {
-        path = logDir.filePath( QString( "%1_%2.log" ).arg( stem ).arg( n ) );
-    }
-    return path;
-}
-
 // ── Instance: start / stop ──────────────────────────────────────────────
 
 bool SerialProcess::start()
@@ -286,77 +166,35 @@ bool SerialProcess::start()
         return true;
     }
 
-    // The path the user typed is checked first: it is theirs to fix,
-    // whatever else would fail.
-    if ( !savePath_.isEmpty() && absoluteUserPath( savePath_ ).isEmpty() ) {
-        Q_EMIT errorOccurred(
-            QString( "The log file %1 is not a full path; give one such as %2." )
-                .arg( savePath_, QDir( QDir::homePath() ).filePath( "serial.log" ) ) );
+    // One log file, never two: the save path, or a temporary file.
+    QString error;
+    if ( !log_.open( config_.portName, savePath_, host_.tempRoot(), error ) ) {
+        Q_EMIT errorOccurred( error );
         return false;
     }
-
-    // When a save path is configured, write directly to the log directory
-    // instead of creating a temporary file.  This avoids accumulating
-    // orphaned temp files and ensures the user's log directory is used.
-    //
-    // Nothing is ever truncated: a save path is appended to, so that Stop
-    // and Start with the same path keep the earlier capture, and the temp
-    // file must be new.
-    QString path;
-    QIODevice::OpenMode mode = QIODevice::WriteOnly;
-    if ( !savePath_.isEmpty() ) {
-        path = absoluteUserPath( savePath_ );
-        QDir().mkpath( QFileInfo( path ).absolutePath() );
-        mode |= QIODevice::Append;
-    }
-    else {
-        if ( !tempDir_.isValid() ) {
-            Q_EMIT errorOccurred( "Failed to create temporary directory." );
-            return false;
-        }
-        path = tempDir_.filePath( "serial_" + safeFileName( config_.portName ) + ".log" );
-        mode |= QIODevice::NewOnly;
-    }
-
-    createdLogFile_ = !QFileInfo::exists( path );
-    QString openError;
-    if ( !openLogFile( path, mode, openError ) ) {
-        Q_EMIT errorOccurred( "Failed to open log file " + path + ": " + openError );
-        tempFile_.setFileName( {} );
-        logPath_.clear();
-        return false;
-    }
-    usingSavePath_ = !savePath_.isEmpty();
-    // A save path appended to counts with what it holds already.
-    fileBytes_ = tempFile_.size();
-    nextRotationAt_ = config_.maxFileBytes;
-
-    lineCount_ = 0;
-    totalLineCount_ = 0;
-    receivedBytes_ = 0;
-    readBuffer_.clear();
-    readAfterCr_ = false;
     portFailed_ = false;
     writeFailed_ = false;
 
     // Configure the serial port
-    port_.setPortName( config_.portName );
-    port_.setBaudRate( config_.baudRate );
-    port_.setDataBits( config_.dataBits );
-    port_.setStopBits( config_.stopBits );
-    port_.setParity( config_.parity );
-    port_.setFlowControl( config_.flowControl );
+    if ( port_ ) {
+        port_->setPortName( config_.portName );
+        port_->setBaudRate( config_.baudRate );
+        port_->setDataBits( config_.dataBits );
+        port_->setStopBits( config_.stopBits );
+        port_->setParity( config_.parity );
+        port_->setFlowControl( config_.flowControl );
+    }
 
-    if ( !port_.open( QIODevice::ReadWrite ) ) {
-        Q_EMIT errorOccurred(
-            QString( "Failed to open port %1: %2" ).arg( config_.portName, port_.errorString() ) );
-        discardLogFile();
+    if ( !device_->open( QIODevice::ReadWrite ) ) {
+        Q_EMIT errorOccurred( QString( "Failed to open port %1: %2" )
+                                  .arg( config_.portName, device_->errorString() ) );
+        log_.discard();
         return false;
     }
     startTime_ = QDateTime::currentDateTime();
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
+    host_.log( LOGSQUIRL_LOG_INFO,
+               QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
     Q_EMIT started();
     return true;
 }
@@ -373,66 +211,39 @@ void SerialProcess::stop()
     // An error of a port being closed (a pulled adapter fails the clear)
     // is not reported: the session ends anyway, and its caller says why.
     {
-        const QSignalBlocker blocker( port_ );
-        port_.clear( QSerialPort::Output );
-        port_.close();
+        const QSignalBlocker blocker( device_ );
+        if ( port_ ) {
+            port_->clear( QSerialPort::Output );
+        }
+        device_->close();
     }
 
-    // Flush any remaining partial line
-    flushPartialLine();
+    // Write out any remaining partial line, and close the file
+    logged( log_.close() );
 
-    tempFile_.close();
-
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Closed %1 (%2 lines captured)" ).arg( config_.portName ).arg( lineCount_ ) );
+    host_.log(
+        LOGSQUIRL_LOG_INFO,
+        QString( "Closed %1 (%2 lines captured)" ).arg( config_.portName ).arg( lineCount() ) );
     Q_EMIT finished();
 }
 
-bool SerialProcess::sendData( const QByteArray& data )
+bool SerialProcess::sendData( const QByteArray& data, TxLineEnding lineEnding )
 {
     if ( !isRunning() ) {
         return false;
     }
 
-    // Append the configured line ending
-    QByteArray payload = data;
-    switch ( config_.txLineEnding ) {
-    case TxLineEnding::CR:
-        payload.append( '\r' );
-        break;
-    case TxLineEnding::LF:
-        payload.append( '\n' );
-        break;
-    case TxLineEnding::CRLF:
-        payload.append( "\r\n" );
-        break;
-    case TxLineEnding::None:
-        break;
-    }
-
-    const auto written = port_.write( payload );
+    const auto written = device_->write( data + lineEndingBytes( lineEnding ) );
     if ( written < 0 ) {
         // A port error from within write() has said why and ended the session.
         if ( !portFailed_ ) {
             Q_EMIT errorOccurred( QString( "Failed to write to %1: %2" )
-                                      .arg( config_.portName, port_.errorString() ) );
+                                      .arg( config_.portName, device_->errorString() ) );
         }
         return false;
     }
 
-    // Log the sent data as a [TX] line in the output file.  The part of a
-    // line received so far is written first, as a line of its own: the
-    // rest of it, arriving after the command, would otherwise be joined to
-    // it below the [TX] line, under a later timestamp.  A character the
-    // device has only begun stays for the rest of the line, kept whole.
-    const auto complete = completeUtf8Length( readBuffer_ );
-    const auto incomplete = readBuffer_.mid( complete );
-    readBuffer_.truncate( complete );
-    flushPartialLine();
-    readBuffer_ = incomplete;
-    if ( writeLine( "[TX] " + data ) ) {
-        flushLogFile();
-    }
+    logged( log_.send( data ) );
 
     Q_EMIT dataSent( data );
     return true;
@@ -440,13 +251,7 @@ bool SerialProcess::sendData( const QByteArray& data )
 
 QString SerialProcess::preserveTempFile()
 {
-    // When writing directly to the log directory, the temp dir is unused
-    // and can be auto-removed safely.
-    if ( usingSavePath_ ) {
-        return {};
-    }
-    tempDir_.setAutoRemove( false );
-    return tempDir_.path();
+    return log_.keepTempDir();
 }
 
 QString SerialProcess::rotateLog( PartialLine partialLine )
@@ -455,120 +260,38 @@ QString SerialProcess::rotateLog( PartialLine partialLine )
         return {};
     }
 
-    if ( partialLine == PartialLine::WriteOut ) {
-        flushPartialLine();
-    }
-
-    // Generate the rotated file path.  When using the log directory,
-    // create a new timestamped file there; otherwise use the temp dir.
-    // Either way the file must be new: opening an existing one would
-    // truncate an earlier capture.
-    QString newPath;
-    if ( usingSavePath_ ) {
-        newPath = generateLogPath( QFileInfo( absoluteUserPath( savePath_ ) ).absolutePath(),
-                                   config_.portName );
-    }
-    else {
-        newPath = tempDir_.filePath( QString( "serial_%1_%2.log" )
-                                         .arg( safeFileName( config_.portName ) )
-                                         .arg( rotationCount_ + 1 ) );
-    }
-
-    // Close the old file (it stays on disk for the old tab)
-    const auto oldPath = logPath_;
-    tempFile_.close();
-
-    QString reason;
-    if ( !openLogFile( newPath, QIODevice::WriteOnly | QIODevice::NewOnly, reason ) ) {
-        // Keep capturing into the old file: a session left running with a
-        // closed file would silently drop everything from here on.
-        QString reopenError;
-        if ( openLogFile( oldPath, QIODevice::WriteOnly | QIODevice::Append, reopenError ) ) {
-            Q_EMIT errorOccurred( QString( "Could not rotate the log to %1 (%2); "
-                                           "still writing to %3." )
-                                      .arg( newPath, reason, oldPath ) );
-        }
-        else {
-            Q_EMIT errorOccurred( QString( "Could not rotate the log to %1 (%2), nor reopen "
-                                           "%3 (%4); capture stopped." )
-                                      .arg( newPath, reason, oldPath, reopenError ) );
+    QString error;
+    const auto newPath = log_.rotate( partialLine, error );
+    // The partial line written out before the rotation may have failed.
+    logged( !log_.hasFailed() );
+    if ( newPath.isEmpty() ) {
+        Q_EMIT errorOccurred( error );
+        // A capture left running without a file would drop everything.
+        if ( !log_.isOpen() ) {
             stop();
         }
         return {};
     }
 
-    ++rotationCount_;
-    lineCount_ = 0;
-    fileBytes_ = 0;
-    nextRotationAt_ = config_.maxFileBytes;
-
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
-                                     .arg( config_.portName )
-                                     .arg( rotationCount_ ) );
+    host_.log( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
+                                       .arg( config_.portName )
+                                       .arg( rotationCount() ) );
 
     return newPath;
 }
 
 bool SerialProcess::isRunning() const
 {
-    return port_.isOpen();
-}
-
-QString SerialProcess::tempFilePath() const
-{
-    return logPath_;
+    return device_->isOpen();
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
-bool SerialProcess::writeLine( const QByteArray& line )
+void SerialProcess::logged( bool ok )
 {
-    if ( writeFailed_ ) {
-        return false;
-    }
-    QByteArray record;
-    if ( config_.timestamps ) {
-        const auto ts = QDateTime::currentDateTime().toString( "yyyy-MM-dd HH:mm:ss.zzz" );
-        record = "[" + ts.toUtf8() + "] ";
-    }
-    record += escapeControls( line );
-    record += '\n';
-    if ( tempFile_.write( record ) != record.size() ) {
+    if ( !ok ) {
         failWrite();
-        return false;
     }
-    ++lineCount_;
-    ++totalLineCount_;
-    fileBytes_ += record.size();
-    // A rotation that fails keeps the capture in this file: it is asked for
-    // again once the file has grown by the limit once more, as asking on
-    // every line would report the failure on every line.
-    if ( config_.maxFileBytes > 0 && fileBytes_ >= nextRotationAt_ ) {
-        nextRotationAt_ = fileBytes_ + config_.maxFileBytes;
-        // From the event loop, not from within the slot that is reading the
-        // port; and not once the file has been rotated meanwhile.
-        QMetaObject::invokeMethod(
-            this,
-            [ this ]() {
-                if ( fileBytes_ >= config_.maxFileBytes && isRunning() ) {
-                    Q_EMIT sizeLimitReached();
-                }
-            },
-            Qt::QueuedConnection );
-    }
-    return true;
-}
-
-bool SerialProcess::flushLogFile()
-{
-    if ( writeFailed_ ) {
-        return false;
-    }
-    if ( !tempFile_.flush() ) {
-        failWrite();
-        return false;
-    }
-    return true;
 }
 
 void SerialProcess::failWrite()
@@ -581,108 +304,46 @@ void SerialProcess::failWrite()
     if ( portFailed_ ) {
         return;
     }
-    Q_EMIT errorOccurred( QString( "Could not write the log file %1 (%2); capture stopped." )
-                              .arg( logPath_, tempFile_.errorString() ) );
+    Q_EMIT errorOccurred( log_.writeError() + "; capture stopped." );
     // From the event loop, not from within the slot that is reading the port.
-    QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
+    queueStop();
 }
 
-bool SerialProcess::openLogFile( const QString& path, QIODevice::OpenMode mode, QString& error )
+void SerialProcess::failPort( const QString& message )
 {
-    tempFile_.setFileName( path );
-#ifdef Q_OS_UNIX
-    // One open that cannot block on a FIFO nor follow a symlink, then a
-    // check of what was opened: a check before the open could be raced.
-    int flags = O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
-    flags |= mode.testFlag( QIODevice::NewOnly ) ? O_EXCL : 0;
-    flags |= mode.testFlag( QIODevice::Append ) ? O_APPEND : 0;
-    const int fd = ::open( QFile::encodeName( path ).constData(), flags, S_IRUSR | S_IWUSR );
-    if ( fd < 0 ) {
-        // A FIFO without a reader (ENXIO) and a symlink (ELOOP) are what
-        // the flags refuse; anything else is the system's own reason.
-        if ( errno == ENXIO ) {
-            error = QStringLiteral( "not a regular file" );
-        }
-        else if ( errno == ELOOP ) {
-            error = QStringLiteral( "a symbolic link, not a regular file" );
-        }
-        else {
-            error = QString::fromLocal8Bit( std::strerror( errno ) );
-        }
-        return false;
-    }
-    struct stat info{};
-    if ( ::fstat( fd, &info ) != 0 || !S_ISREG( info.st_mode ) ) {
-        ::close( fd );
-        error = QStringLiteral( "not a regular file" );
-        return false;
-    }
-    // A regular file never blocks; the flag only kept the open from waiting.
-    ::fcntl( fd, F_SETFL, ::fcntl( fd, F_GETFL ) & ~O_NONBLOCK );
-    if ( !tempFile_.open( fd, mode & ~QIODevice::NewOnly, QFileDevice::AutoCloseHandle ) ) {
-        ::close( fd );
-        error = tempFile_.errorString();
-        return false;
-    }
-    logPath_ = path;
-    return true;
-#else
-    // Checked before the open, which a rename between the two could race;
-    // Windows has no open that refuses a link or a device by itself.
-    const QFileInfo info( path );
-    if ( info.isSymLink() || ( info.exists() && !info.isFile() ) ) {
-        error = QStringLiteral( "not a regular file" );
-        return false;
-    }
-    if ( !tempFile_.open( mode ) ) {
-        error = tempFile_.errorString();
-        return false;
-    }
-    if ( mode.testFlag( QIODevice::NewOnly ) || !info.exists() ) {
-        tempFile_.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
-    }
-    logPath_ = path;
-    return true;
-#endif
-}
-
-void SerialProcess::discardLogFile()
-{
-    tempFile_.close();
-    if ( createdLogFile_ && !logPath_.isEmpty() ) {
-        QFile::remove( logPath_ );
-    }
-    tempFile_.setFileName( {} );
-    logPath_.clear();
-}
-
-void SerialProcess::flushPartialLine()
-{
-    if ( readBuffer_.isEmpty() ) {
+    // A session that is ending already has said why.
+    if ( portFailed_ || writeFailed_ ) {
         return;
     }
-
-    if ( writeLine( readBuffer_ ) ) {
-        flushLogFile();
-    }
-    readBuffer_.clear();
+    // Stop from the event loop, not from within the device's own error
+    // handling.  The receiver logs and shows the message; logging it here
+    // as well would report the error twice.
+    portFailed_ = true;
+    Q_EMIT errorOccurred( message );
+    queueStop();
 }
 
-// ── Private slots ───────────────────────────────────────────────────────
+void SerialProcess::queueStop()
+{
+    QMetaObject::invokeMethod(
+        this,
+        [ this ]() { guarded( host_, "stopping a failed serial capture", [ this ] { stop(); } ); },
+        Qt::QueuedConnection );
+}
 
 void SerialProcess::onReadyRead()
 {
-    const auto data = port_.readAll();
-    receivedBytes_ += data.size();
-    readBuffer_.append( data );
-
-    const auto lines = takeLines( readBuffer_, readAfterCr_ );
-    for ( const auto& line : lines ) {
-        if ( !writeLine( line ) ) {
-            return;
-        }
+    // All the device holds.  QSerialPort reports its errors through
+    // errorOccurred(); another device (one a test plays) by a read that fails.
+    QByteArray data( qMax( device_->bytesAvailable(), kMinReadSize ), Qt::Uninitialized );
+    const auto read = device_->read( data.data(), data.size() );
+    if ( read < 0 ) {
+        failPort( QString( "Serial port error on %1: %2; capture stopped." )
+                      .arg( config_.portName, device_->errorString() ) );
+        return;
     }
-    flushLogFile();
+    data.truncate( read );
+    logged( log_.receive( data ) );
 }
 
 void SerialProcess::onPortError( QSerialPort::SerialPortError error )
@@ -690,9 +351,8 @@ void SerialProcess::onPortError( QSerialPort::SerialPortError error )
     // NoError is emitted on successful operations, and a TimeoutError only
     // ends a waitFor...() call, which the session never makes: ignore both.
     // While the port is not open, the error comes from open(), and start()
-    // reports it.  A session that is ending already has said why.
-    if ( error == QSerialPort::NoError || error == QSerialPort::TimeoutError || !port_.isOpen()
-         || portFailed_ || writeFailed_ ) {
+    // reports it.
+    if ( error == QSerialPort::NoError || error == QSerialPort::TimeoutError || !port_->isOpen() ) {
         return;
     }
 
@@ -700,19 +360,14 @@ void SerialProcess::onPortError( QSerialPort::SerialPortError error )
     // powered off) or the driver failed, and the port will not deliver data
     // again - some drivers report an unplug as a ReadError or an
     // UnknownError, and the read notifier then fires on every pass of the
-    // event loop.  Stop from the event loop, not from within QSerialPort's
-    // own error handling.  The receiver logs and shows the message; logging
-    // it here as well would report the error twice.
-    portFailed_ = true;
+    // event loop.
     if ( error == QSerialPort::ResourceError ) {
-        Q_EMIT errorOccurred(
-            QString( "%1 was disconnected; capture stopped." ).arg( config_.portName ) );
+        failPort( QString( "%1 was disconnected; capture stopped." ).arg( config_.portName ) );
     }
     else {
-        Q_EMIT errorOccurred( QString( "Serial port error on %1: %2; capture stopped." )
-                                  .arg( config_.portName, port_.errorString() ) );
+        failPort( QString( "Serial port error on %1: %2; capture stopped." )
+                      .arg( config_.portName, port_->errorString() ) );
     }
-    QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
 }
 
 } // namespace serial_monitor

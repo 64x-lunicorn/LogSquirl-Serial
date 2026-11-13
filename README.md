@@ -267,13 +267,18 @@ graph TD
 `serial.ini`; the dialog saves and deletes them through it, and the sidebar
 shows one tile (`src/connectiontile.h`) for each, rebuilt whenever the store
 changes. `Sessions` (`src/sessions.h`) runs the captures, one per port, and
-keeps the port list. A tile starts its capture with its configuration's name
-as the session's owner, and finds it again with `Sessions::portOf(name)` —
-also after its port was edited. The views call `Sessions` and update on its
+keeps the port list. A tile starts its capture in one call,
+`Sessions::start(profile, defaults, defaultLogDir)`, which checks the
+configuration, takes the settings from it and the defaults, picks its log file,
+refuses a busy port, tells the user why it does not start, and makes the
+configuration's name the session's owner; the tile then stops, rotates, sends to and reads it by that
+name (`Sessions::stop(name)`, `rotate(name)`, `send(name, …)`,
+`captureOf(name)`) — also after its port was edited; for a name that captures
+nothing they do nothing. The views call `Sessions` and update on its
 signals — `sessionStarted`, `sessionStopped`, `sessionChanged` (rotated) and
 `portsChanged` — also when a session ends on its own. A running session's
 counters (lines, bytes received, file size, rotations, size of the next
-rotation, start time) are read from `Sessions::session(port)`: no signal
+rotation, start time) are read from `Sessions::captureOf(name)`: no signal
 announces them, so the sidebar reads them once a second while some capture
 runs, and shows them on its running tile with the lines per second and the
 running time.
@@ -291,7 +296,8 @@ sequenceDiagram
     participant LS as LogSquirl Tab
 
     User->>SW: Click ▶ Start
-    SW->>S: startSession(config, savePath, owner = name)
+    SW->>S: start(profile, defaults, defaultLogDir)
+    S->>S: check it, settings and log file from it, port free?
     S->>SP: start()
     SP->>Port: open(ReadWrite)
     SP->>TF: create temp file
@@ -304,18 +310,18 @@ sequenceDiagram
         LS->>TF: tail/follow reads
     end
     loop Every second while it runs
-        SW->>S: session(portOf(name))
+        SW->>S: captureOf(name)
         SW->>SW: show lines, bytes, lines/s, file, running time
     end
     User->>SW: Type a command, click ➤ Send
-    SW->>S: sendToSession(portOf(name), text, line ending)
+    SW->>S: send(name, text, line ending)
     S->>SP: sendData(): to the port, and a [TX] line to the file
     User->>SW: Click ↻ Rotate
-    SW->>S: rotateSession(portOf(name))
+    SW->>S: rotate(name)
     S-->>LS: open_file(newPath, follow=1): new tab opens
     S-->>SW: sessionChanged(port)
     User->>SW: Click ■ Stop
-    SW->>S: stopSession(portOf(name))
+    SW->>S: stop(name)
     S->>SP: stop() + preserveTempFile()
     SP->>Port: close()
     S-->>SW: sessionStopped(port)
@@ -349,10 +355,14 @@ logsquirl-serial/
 ├── include/
 │   └── logsquirl_plugin_api.h  # Vendored SDK header (MIT license)
 ├── src/
-│   ├── plugin.h                # Global state shared across translation units
-│   ├── plugin.cpp              # C ABI entry points (get_info, init, shutdown)
+│   ├── plugin.h                # The running plugin's host, guarded() for the entry points
+│   ├── plugin.cpp              # C ABI entry points; the plugin instance that owns every part
+│   ├── host.h                  # Host: what the captures need of LogSquirl; its C ABI adapter
+│   ├── host.cpp
 │   ├── serialprocess.h         # Serial port discovery + per-port session wrapper
 │   ├── serialprocess.cpp
+│   ├── capturelog.h            # The log file and its lines: framing, [TX], rotation, size limit
+│   ├── capturelog.cpp
 │   ├── sessions.h              # Session management (start/stop/rotate), port list
 │   ├── sessions.cpp
 │   ├── profiles.h              # Saved port configurations and their store (serial.ini)

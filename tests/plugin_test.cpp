@@ -49,15 +49,91 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QPushButton>
-#include <QSettings>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWidget>
 #include <QWindow>
 
-using serial_test::FakeHost;
 using serial_test::waitFor;
+
+namespace {
+
+/// A FakeHost whose temporary root the plugin puts its temporary
+/// directories in (setTempRootForTests()).
+class FakeHost : public serial_test::FakeHost {
+public:
+    FakeHost()
+    {
+        serial_monitor::setTempRootForTests( tempRoot() );
+    }
+
+    ~FakeHost() override
+    {
+        serial_monitor::setTempRootForTests( {} );
+    }
+};
+
+/// The widgets of type W there are now, wherever they are parented.
+template <typename W>
+QList<W*> widgetsOf()
+{
+    QList<W*> found;
+    for ( auto* widget : QApplication::allWidgets() ) {
+        if ( auto* typed = qobject_cast<W*>( widget ) ) {
+            found << typed;
+        }
+    }
+    return found;
+}
+
+/// The plugin's dialog, which its menu entry and its tab show.
+serial_monitor::PortDialog* portDialog()
+{
+    const auto dialogs = widgetsOf<serial_monitor::PortDialog>();
+    REQUIRE( dialogs.size() == 1 );
+    return dialogs.first();
+}
+
+/// Nothing is left of a plugin instance: no tab, no widget, no host table.
+void requireNothingLeft( const FakeHost& host )
+{
+    REQUIRE( host.sidebarTabs.isEmpty() );
+    REQUIRE( widgetsOf<serial_monitor::SidebarWidget>().isEmpty() );
+    REQUIRE( widgetsOf<serial_monitor::PortDialog>().isEmpty() );
+    REQUIRE( serial_monitor::hostApiSize() == 0 );
+}
+
+/// Save @p profile in the host's serial.ini, as the dialog does.
+void saveProfile( const FakeHost& host, const serial_monitor::PortProfile& profile )
+{
+    REQUIRE( serial_monitor::ProfileStore( host.configDir() ).upsert( profile ).isEmpty() );
+}
+
+/// The tab the plugin registered.
+serial_monitor::SidebarWidget* sidebarTab( const FakeHost& host )
+{
+    REQUIRE( host.sidebarTabs.size() == 1 );
+    return static_cast<serial_monitor::SidebarWidget*>( host.sidebarTabs.first() );
+}
+
+serial_monitor::PortProfile profileFor( const QString& name, const QString& port,
+                                        const QString& logDir = {} )
+{
+    serial_monitor::PortProfile profile;
+    profile.name = name;
+    profile.serial.portName = port;
+    profile.logDir = logDir;
+    return profile;
+}
+
+QString stateOf( const serial_monitor::ConnectionTile* tile )
+{
+    REQUIRE( tile );
+    return tile->findChild<QLabel*>( "state" )->property( "state" ).toString();
+}
+
+} // namespace
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
@@ -70,9 +146,7 @@ SCENARIO( "the Serial Monitor dialog belongs to LogSquirl's window", "[plugin]" 
     GIVEN( "an initialised plugin and an active main window" )
     {
         FakeHost host;
-        REQUIRE(
-            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-            == 0 );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
         REQUIRE( host.menuActions.size() == 1 );
 
         QWidget mainWindow;
@@ -84,7 +158,7 @@ SCENARIO( "the Serial Monitor dialog belongs to LogSquirl's window", "[plugin]" 
         WHEN( "the user opens the dialog from the Plugins menu" )
         {
             host.menuActions.first().trigger();
-            auto* dialog = serial_monitor::g_state.dialog;
+            auto* dialog = portDialog();
 
             THEN( "it is shown on top of the main window" )
             {
@@ -104,7 +178,7 @@ SCENARIO( "the Serial Monitor dialog belongs to LogSquirl's window", "[plugin]" 
         }
 
         logsquirl_plugin_shutdown();
-        REQUIRE( serial_monitor::g_state.dialog == nullptr );
+        REQUIRE( widgetsOf<serial_monitor::PortDialog>().isEmpty() );
     }
 }
 
@@ -113,9 +187,7 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
     GIVEN( "an initialised plugin with timestamps on by default" )
     {
         FakeHost host;
-        REQUIRE(
-            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-            == 0 );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
 
         WHEN( "the user turns timestamps off in Plugins → Configure" )
         {
@@ -139,15 +211,15 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
             THEN( "the dialog offers the setting and saves it" )
             {
                 REQUIRE( foundCheckBox );
-                QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-                REQUIRE_FALSE( settings.value( "serial/timestamps", true ).toBool() );
+                REQUIRE_FALSE(
+                    serial_monitor::ProfileStore( host.configDir() ).defaults().timestamps );
             }
 
             THEN( "a new configuration in the dialog proposes it" )
             {
-                serial_monitor::g_state.dialog->newConfiguration();
-                auto* dialogTimestamps
-                    = serial_monitor::g_state.dialog->findChild<QCheckBox*>( "timestamps" );
+                auto* dialog = portDialog();
+                dialog->newConfiguration();
+                auto* dialogTimestamps = dialog->findChild<QCheckBox*>( "timestamps" );
                 REQUIRE( dialogTimestamps );
                 REQUIRE_FALSE( dialogTimestamps->isChecked() );
             }
@@ -162,9 +234,7 @@ SCENARIO( "the Configure dialog sets the size at which log files are rotated", "
     GIVEN( "an initialised plugin" )
     {
         FakeHost host;
-        REQUIRE(
-            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-            == 0 );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
 
         WHEN( "the user opens Plugins → Configure" )
         {
@@ -191,8 +261,8 @@ SCENARIO( "the Configure dialog sets the size at which log files are rotated", "
             {
                 REQUIRE( shownMiB == serial_monitor::kDefaultMaxFileMiB );
                 REQUIRE_FALSE( neverText.isEmpty() );
-                QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-                REQUIRE( settings.value( "serial/maxFileMiB" ).toInt() == 50 );
+                REQUIRE( serial_monitor::ProfileStore( host.configDir() ).defaults().maxFileMiB
+                         == 50 );
             }
         }
 
@@ -206,9 +276,7 @@ SCENARIO( "the Configure dialog never saves where it should not", "[plugin]" )
     {
         FakeHost host;
         host.hasConfigDir = false;
-        REQUIRE(
-            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-            == 0 );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
         host.notifications.clear();
 
         WHEN( "the user opens Plugins → Configure" )
@@ -229,6 +297,8 @@ SCENARIO( "the Configure dialog never saves where it should not", "[plugin]" )
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "no configuration directory" ) );
                 REQUIRE( host.logs.filter( "no configuration directory" ).size() == 1 );
+                REQUIRE( host.logLevels.at( host.logs.indexOf( host.notifications.first() ) )
+                         == LOGSQUIRL_LOG_WARNING );
             }
         }
 
@@ -244,9 +314,7 @@ SCENARIO( "the Configure dialog never saves where it should not", "[plugin]" )
         }
 
         FakeHost host;
-        REQUIRE(
-            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-            == 0 );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
         host.notifications.clear();
 
         WHEN( "the user saves new defaults in Plugins → Configure" )
@@ -269,6 +337,10 @@ SCENARIO( "the Configure dialog never saves where it should not", "[plugin]" )
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "could not be saved" ) );
                 REQUIRE( host.logs.filter( "Default baud rate set" ).isEmpty() );
+                const auto logged = host.logs.indexOf( host.notifications.first() );
+                REQUIRE( logged >= 0 );
+                REQUIRE( host.logs.count( host.notifications.first() ) == 1 );
+                REQUIRE( host.logLevels.at( logged ) == LOGSQUIRL_LOG_ERROR );
             }
         }
 
@@ -297,19 +369,23 @@ serial_monitor::SerialConfig configFor( const QString& portName )
 
 SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
 {
-    GIVEN( "an initialised plugin with a stopped and a running, rotated temp-file session" )
+    // The plugin removes the temporary files of every capture of this
+    // process, also of an instance before a runtime disable or update: a
+    // capture of its own here.  (The plugin's own captures write to save
+    // paths whenever it has a configuration to start.)
+    GIVEN( "an initialised plugin, and a stopped and a running, rotated temp-file capture" )
     {
         FakeHost host;
         serial_test::PseudoTerminal firstDevice;
         serial_test::PseudoTerminal secondDevice;
-        const auto* api = serial_monitor::g_state.api;
-        auto* handle = serial_monitor::g_state.handle;
+        const auto* api = host.api();
+        auto* handle = host.handle();
         REQUIRE( logsquirl_plugin_init( api, handle ) == 0 );
-        auto* widget = serial_monitor::g_state.sessions;
-        REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ) ) );
-        widget->stopSession( firstDevice.devicePath() );
-        REQUIRE( widget->startSession( configFor( secondDevice.devicePath() ) ) );
-        widget->rotateSession( secondDevice.devicePath() );
+        serial_monitor::Sessions captures( host );
+        REQUIRE( captures.startSession( configFor( firstDevice.devicePath() ) ) );
+        captures.stopSession( firstDevice.devicePath() );
+        REQUIRE( captures.startSession( configFor( secondDevice.devicePath() ) ) );
+        captures.rotateSession( secondDevice.devicePath() );
         REQUIRE( host.openedFiles.size() == 3 );
         const auto stoppedDir = dirOf( host.openedFiles.first() );
         const auto runningDir = dirOf( host.openedFiles.last() );
@@ -338,8 +414,7 @@ SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
             {
                 host.openedFiles.clear();
                 REQUIRE( logsquirl_plugin_init( api, handle ) == 0 );
-                REQUIRE( serial_monitor::g_state.sessions->startSession(
-                    configFor( firstDevice.devicePath() ) ) );
+                REQUIRE( captures.startSession( configFor( firstDevice.devicePath() ) ) );
                 const auto newDir = dirOf( host.openedFiles.first() );
                 logsquirl_plugin_shutdown();
 
@@ -381,22 +456,23 @@ SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
 
 SCENARIO( "save paths are never removed", "[plugin]" )
 {
-    GIVEN( "a stopped and a rotated session that write to save paths below the temporary root" )
+    GIVEN( "a stopped and a rotated tile's capture that write to save paths below the temporary "
+           "root" )
     {
         FakeHost host;
         serial_test::PseudoTerminal firstDevice;
         serial_test::PseudoTerminal secondDevice;
-        REQUIRE(
-            logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-            == 0 );
-        auto* widget = serial_monitor::g_state.sessions;
         const auto logDir = host.tempRoot() + "/logs";
-        REQUIRE( widget->startSession( configFor( firstDevice.devicePath() ),
-                                       logDir + "/stopped.log" ) );
-        widget->stopSession( firstDevice.devicePath() );
-        REQUIRE( widget->startSession( configFor( secondDevice.devicePath() ),
-                                       logDir + "/rotated.log" ) );
-        widget->rotateSession( secondDevice.devicePath() );
+        saveProfile( host, profileFor( "stopped", firstDevice.devicePath(), logDir ) );
+        saveProfile( host, profileFor( "rotated", secondDevice.devicePath(), logDir ) );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
+        auto* sidebar = sidebarTab( host );
+        sidebar->tile( "stopped" )->findChild<QPushButton*>( "startStop" )->click();
+        REQUIRE( stateOf( sidebar->tile( "stopped" ) ) == "running" );
+        sidebar->tile( "stopped" )->findChild<QPushButton*>( "startStop" )->click();
+        REQUIRE( stateOf( sidebar->tile( "stopped" ) ) == "stopped" );
+        sidebar->tile( "rotated" )->findChild<QPushButton*>( "startStop" )->click();
+        sidebar->tile( "rotated" )->findChild<QPushButton*>( "rotate" )->click();
         const auto files = QDir( logDir ).entryList( QDir::Files );
         REQUIRE( files.size() == 3 );
 
@@ -437,9 +513,7 @@ SCENARIO( "temporary directories of LogSquirl processes that ended are swept", "
 
         WHEN( "the plugin is initialised" )
         {
-            REQUIRE(
-                logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-                == 0 );
+            REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
             logsquirl_plugin_shutdown();
 
             THEN( "only the ended process's directory is removed" )
@@ -452,9 +526,7 @@ SCENARIO( "temporary directories of LogSquirl processes that ended are swept", "
 
         WHEN( "the plugin shuts down as LogSquirl quits" )
         {
-            REQUIRE(
-                logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-                == 0 );
+            REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
             QMetaObject::invokeMethod( QCoreApplication::instance(), "aboutToQuit" );
             logsquirl_plugin_shutdown();
 
@@ -481,9 +553,7 @@ SCENARIO( "temporary directories of LogSquirl processes that ended are swept", "
 
         WHEN( "the plugin is initialised" )
         {
-            REQUIRE(
-                logsquirl_plugin_init( serial_monitor::g_state.api, serial_monitor::g_state.handle )
-                == 0 );
+            REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
             logsquirl_plugin_shutdown();
 
             THEN( "the link is not followed" )
@@ -503,52 +573,57 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
 
         WHEN( "the plugin is initialised" )
         {
-            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+            REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
 
             THEN( "its sidebar widget is registered as a tab" )
             {
                 REQUIRE( host.sidebarTabs.size() == 1 );
-                REQUIRE( host.sidebarTabs.first() == serial_monitor::g_state.sidebarWidget );
+                REQUIRE( widgetsOf<serial_monitor::SidebarWidget>()
+                         == QList<serial_monitor::SidebarWidget*>{ sidebarTab( host ) } );
             }
 
             AND_WHEN( "it is shut down" )
             {
+                bool widgetLivedOnUnregister = false;
+                host.onUnregisterSidebarTab = [ &host, &widgetLivedOnUnregister ]( void* widget ) {
+                    widgetLivedOnUnregister
+                        = widgetsOf<serial_monitor::SidebarWidget>()
+                              == QList<serial_monitor::SidebarWidget*>{ sidebarTab( host ) }
+                          && widget == host.sidebarTabs.first();
+                };
                 logsquirl_plugin_shutdown();
 
-                THEN( "the tab is unregistered and the state cleared" )
+                THEN( "the tab is unregistered while its widget lives, and nothing is left" )
                 {
-                    REQUIRE( host.sidebarTabs.isEmpty() );
-                    REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
-                    REQUIRE( serial_monitor::g_state.dialog == nullptr );
-                    REQUIRE( serial_monitor::g_state.profiles == nullptr );
-                    REQUIRE( serial_monitor::g_state.sessions == nullptr );
-                    REQUIRE_FALSE( serial_monitor::g_state.initialised );
+                    REQUIRE( widgetLivedOnUnregister );
+                    requireNothingLeft( host );
                 }
             }
 
             logsquirl_plugin_shutdown();
         }
     }
+
+    GIVEN( "a plugin that was never initialised" )
+    {
+        FakeHost host;
+
+        THEN( "shutting it down is harmless" )
+        {
+            REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
+            requireNothingLeft( host );
+            REQUIRE( host.logs.isEmpty() );
+        }
+    }
 }
-
-namespace {
-
-/// The tab the plugin registered.
-serial_monitor::SidebarWidget* sidebarTab( const FakeHost& host )
-{
-    REQUIRE( host.sidebarTabs.size() == 1 );
-    return static_cast<serial_monitor::SidebarWidget*>( host.sidebarTabs.first() );
-}
-
-} // namespace
 
 SCENARIO( "saved configurations survive a restart of LogSquirl", "[plugin]" )
 {
     GIVEN( "a configuration saved in the dialog of an initialised plugin" )
     {
         FakeHost host;
-        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-        auto* dialog = serial_monitor::g_state.dialog;
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
+        auto* dialog = portDialog();
         dialog->findChild<QComboBox*>( "profile" )->setEditText( "board" );
         dialog->findChild<QComboBox*>( "port" )->setEditText( "/dev/ttyUSB0" );
         dialog->findChild<QPushButton*>( "saveProfile" )->click();
@@ -557,7 +632,7 @@ SCENARIO( "saved configurations survive a restart of LogSquirl", "[plugin]" )
         WHEN( "the plugin is shut down and started again, as when LogSquirl restarts" )
         {
             logsquirl_plugin_shutdown();
-            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+            REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
 
             THEN( "the sidebar shows its tile again" )
             {
@@ -577,12 +652,9 @@ SCENARIO( "the sidebar opens the dialog", "[plugin]" )
     GIVEN( "an initialised plugin with a saved configuration" )
     {
         FakeHost host;
-        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-        serial_monitor::PortProfile profile;
-        profile.name = "board";
-        profile.serial.portName = "/dev/ttyUSB0";
-        REQUIRE( serial_monitor::g_state.profiles->upsert( profile ).isEmpty() );
-        auto* dialog = serial_monitor::g_state.dialog;
+        saveProfile( host, profileFor( "board", "/dev/ttyUSB0" ) );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
+        auto* dialog = portDialog();
 
         WHEN( "the tile's Edit… is clicked" )
         {
@@ -619,23 +691,62 @@ SCENARIO( "a tile's capture stops when the plugin shuts down", "[plugin]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-        serial_monitor::PortProfile profile;
-        profile.name = "board";
-        profile.serial.portName = device.devicePath();
-        profile.logDir = host.tempRoot() + "/logs";
-        REQUIRE( serial_monitor::g_state.profiles->upsert( profile ).isEmpty() );
+        saveProfile( host, profileFor( "board", device.devicePath(), host.tempRoot() + "/logs" ) );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
         sidebarTab( host )->tile( "board" )->findChild<QPushButton*>( "startStop" )->click();
-        REQUIRE( serial_monitor::g_state.sessions->portOf( "board" ) == device.devicePath() );
+        REQUIRE( stateOf( sidebarTab( host )->tile( "board" ) ) == "running" );
         REQUIRE( host.followedFiles.size() == 1 );
+
+        WHEN( "its configuration is renamed in the dialog while it captures" )
+        {
+            sidebarTab( host )->tile( "board" )->findChild<QPushButton*>( "edit" )->click();
+            auto* dialog = portDialog();
+            dialog->findChild<QComboBox*>( "profile" )->setEditText( "console" );
+            dialog->findChild<QPushButton*>( "saveProfile" )->click();
+
+            THEN( "the plugin's store refuses, the capture asked whether it runs" )
+            {
+                REQUIRE( dialog->findChild<QLabel*>( "status" )->text().contains( "board" ) );
+                const serial_monitor::ProfileStore saved( host.configDir() );
+                REQUIRE( saved.find( "board" ) );
+                REQUIRE_FALSE( saved.find( "console" ) );
+                REQUIRE( stateOf( sidebarTab( host )->tile( "board" ) ) == "running" );
+            }
+        }
 
         WHEN( "the plugin is shut down" )
         {
+            // What the parts show as the host lets go of the tab, the first
+            // of them to go.
+            QString tileState;
+            int dialogs = 0;
+            host.onUnregisterSidebarTab = [ &host, &tileState, &dialogs ]( void* ) {
+                tileState = stateOf( sidebarTab( host )->tile( "board" ) );
+                dialogs = widgetsOf<serial_monitor::PortDialog>().size();
+            };
             logsquirl_plugin_shutdown();
+
+            THEN( "the capture stopped before the parts that show it went" )
+            {
+                REQUIRE( tileState == "stopped" );
+                REQUIRE( dialogs == 1 );
+                requireNothingLeft( host );
+            }
 
             THEN( "the capture's file stays for its tab" )
             {
                 REQUIRE( QFileInfo::exists( host.followedFiles.first() ) );
+            }
+
+            THEN( "the port is free for another capture" )
+            {
+                REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
+                sidebarTab( host )
+                    ->tile( "board" )
+                    ->findChild<QPushButton*>( "startStop" )
+                    ->click();
+                REQUIRE( stateOf( sidebarTab( host )->tile( "board" ) ) == "running" );
+                logsquirl_plugin_shutdown();
             }
         }
 
@@ -657,14 +768,12 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
         WHEN( "the plugin is initialised" )
         {
             int rc = 0;
-            REQUIRE_NOTHROW( rc = logsquirl_plugin_init( host.api(), &host ) );
+            REQUIRE_NOTHROW( rc = logsquirl_plugin_init( host.api(), host.handle() ) );
 
             THEN( "initialisation fails, is logged, and leaves nothing behind" )
             {
                 REQUIRE( rc != 0 );
-                REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
-                REQUIRE( serial_monitor::g_state.dialog == nullptr );
-                REQUIRE( serial_monitor::g_state.sessions == nullptr );
+                requireNothingLeft( host );
                 REQUIRE_FALSE( host.logs.filter( "no room for another tab" ).isEmpty() );
             }
         }
@@ -680,16 +789,21 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
 
         WHEN( "the plugin is initialised" )
         {
+            bool widgetLivedOnUnregister = false;
+            host.onUnregisterSidebarTab = [ &widgetLivedOnUnregister ]( void* ) {
+                widgetLivedOnUnregister = widgetsOf<serial_monitor::SidebarWidget>().size() == 1;
+            };
             int rc = 0;
-            REQUIRE_NOTHROW( rc = logsquirl_plugin_init( host.api(), &host ) );
+            REQUIRE_NOTHROW( rc = logsquirl_plugin_init( host.api(), host.handle() ) );
 
-            THEN( "initialisation fails and the tab is unregistered before its widget goes" )
+            THEN( "initialisation fails, is logged, and the tab is unregistered before its "
+                  "widget goes" )
             {
                 REQUIRE( rc != 0 );
-                REQUIRE( host.sidebarTabs.isEmpty() );
-                REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
-                REQUIRE( serial_monitor::g_state.dialog == nullptr );
-                REQUIRE( serial_monitor::g_state.sessions == nullptr );
+                REQUIRE( widgetLivedOnUnregister );
+                requireNothingLeft( host );
+                REQUIRE_FALSE(
+                    host.logs.filter( "initialisation failed: the log is full" ).isEmpty() );
             }
         }
 
@@ -699,20 +813,38 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
     GIVEN( "an initialised plugin in a host whose log throws on shutdown" )
     {
         FakeHost host;
-        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
         host.failLogContaining = "shutting down";
 
         WHEN( "it is shut down" )
         {
             REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
 
-            THEN( "every other step still ran" )
+            THEN( "it is logged, and every other step still ran" )
             {
-                REQUIRE( host.sidebarTabs.isEmpty() );
-                REQUIRE( serial_monitor::g_state.sidebarWidget == nullptr );
-                REQUIRE( serial_monitor::g_state.dialog == nullptr );
-                REQUIRE( serial_monitor::g_state.sessions == nullptr );
-                REQUIRE_FALSE( serial_monitor::g_state.initialised );
+                REQUIRE_FALSE( host.logs.filter( "failed: the log is full" ).isEmpty() );
+                requireNothingLeft( host );
+            }
+        }
+    }
+
+    GIVEN( "an initialised plugin in a host whose unregister_sidebar_tab() throws" )
+    {
+        FakeHost host;
+        REQUIRE( logsquirl_plugin_init( host.api(), host.handle() ) == 0 );
+        host.onUnregisterSidebarTab
+            = []( void* ) { throw std::runtime_error( "the tab is stuck" ); };
+
+        WHEN( "it is shut down" )
+        {
+            REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
+
+            THEN( "it is logged, and every part still goes" )
+            {
+                REQUIRE_FALSE( host.logs.filter( "failed: the tab is stuck" ).isEmpty() );
+                REQUIRE( widgetsOf<serial_monitor::SidebarWidget>().isEmpty() );
+                REQUIRE( widgetsOf<serial_monitor::PortDialog>().isEmpty() );
+                REQUIRE( serial_monitor::hostApiSize() == 0 );
             }
         }
     }
@@ -727,14 +859,14 @@ SCENARIO( "the plugin learns which functions the host has from the size of its t
 
         WHEN( "the plugin is initialised" )
         {
-            REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, sizeof( LogSquirlHostApi ) )
-                     == 0 );
+            REQUIRE(
+                logsquirl_plugin_init_ex( host.api(), host.handle(), sizeof( LogSquirlHostApi ) )
+                == 0 );
 
             THEN( "it keeps the size, and every later function counts as there" )
             {
-                REQUIRE( serial_monitor::g_state.hostApiSize == sizeof( LogSquirlHostApi ) );
-                REQUIRE(
-                    LOGSQUIRL_HOST_API_HAS( serial_monitor::g_state.hostApiSize, open_regex_lab ) );
+                REQUIRE( serial_monitor::hostApiSize() == sizeof( LogSquirlHostApi ) );
+                REQUIRE( LOGSQUIRL_HOST_API_HAS( serial_monitor::hostApiSize(), open_regex_lab ) );
             }
 
             AND_WHEN( "it is shut down" )
@@ -743,7 +875,7 @@ SCENARIO( "the plugin learns which functions the host has from the size of its t
 
                 THEN( "the size is forgotten" )
                 {
-                    REQUIRE( serial_monitor::g_state.hostApiSize == 0 );
+                    REQUIRE( serial_monitor::hostApiSize() == 0 );
                 }
             }
 
@@ -762,13 +894,13 @@ SCENARIO( "the plugin learns which functions the host has from the size of its t
 
         WHEN( "it calls init()" )
         {
-            REQUIRE( logsquirl_plugin_init( baseTable, &host ) == 0 );
+            REQUIRE( logsquirl_plugin_init( baseTable, host.handle() ) == 0 );
 
             THEN( "the plugin starts with the base table's size and no later function" )
             {
-                REQUIRE( serial_monitor::g_state.hostApiSize == LOGSQUIRL_HOST_API_BASE_SIZE );
+                REQUIRE( serial_monitor::hostApiSize() == LOGSQUIRL_HOST_API_BASE_SIZE );
                 REQUIRE_FALSE(
-                    LOGSQUIRL_HOST_API_HAS( serial_monitor::g_state.hostApiSize, open_regex_lab ) );
+                    LOGSQUIRL_HOST_API_HAS( serial_monitor::hostApiSize(), open_regex_lab ) );
                 REQUIRE( host.sidebarTabs.size() == 1 );
             }
 

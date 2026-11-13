@@ -36,7 +36,6 @@
 
 #include <QComboBox>
 #include <QLocale>
-#include <QSettings>
 
 #include <algorithm>
 
@@ -45,7 +44,6 @@ using serial_monitor::initBaudRateCombo;
 using serial_monitor::PortDialog;
 using serial_monitor::ProfileStore;
 using serial_monitor::selectBaudRate;
-using serial_monitor::SerialConfig;
 using serial_monitor::Sessions;
 using serial_test::FakeHost;
 
@@ -67,8 +65,9 @@ bool isSorted( const QList<int>& rates )
 
 void saveDefaultBaud( const FakeHost& host, int rate )
 {
-    QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-    settings.setValue( "serial/defaultBaud", rate );
+    serial_monitor::Defaults defaults;
+    defaults.baudRate = rate;
+    REQUIRE( ProfileStore( host.configDir() ).saveDefaults( defaults ).isEmpty() );
 }
 
 } // namespace
@@ -200,8 +199,8 @@ SCENARIO( "a custom default baud rate is proposed for a new configuration", "[ba
 
         WHEN( "the dialog sets up a new configuration" )
         {
-            Sessions sessions;
-            ProfileStore profiles( host.configDir() + "/serial.ini" );
+            Sessions sessions( host );
+            ProfileStore profiles( host.configDir() );
             PortDialog dialog( &profiles, &sessions );
             dialog.newConfiguration();
 
@@ -221,18 +220,19 @@ SCENARIO( "a session with an invalid baud rate is refused", "[baudrate]" )
     GIVEN( "a configuration without a usable baud rate" )
     {
         FakeHost host;
-        Sessions sessions;
-        SerialConfig cfg;
-        cfg.portName = "logsquirl-test-port";
-        cfg.baudRate = 0;
+        Sessions sessions( host );
+        serial_monitor::PortProfile profile;
+        profile.name = "board";
+        profile.serial.portName = "logsquirl-test-port";
+        profile.serial.baudRate = 0;
 
         WHEN( "starting a session" )
         {
-            const auto started = sessions.startSession( cfg );
+            const auto problem = sessions.start( profile, serial_monitor::Defaults(), {} );
 
             THEN( "it is rejected with a notification" )
             {
-                REQUIRE_FALSE( started );
+                REQUIRE( problem.contains( "baud rate" ) );
                 REQUIRE( sessions.activeSessionCount() == 0 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "baud rate" ) );
