@@ -138,8 +138,13 @@ classDiagram
         +activeSessionCount() int
         +activePorts() QStringList
         +session(port) SerialProcess*
-        +ownerOf(port) QString
-        +portOf(owner) QString
+        +isRunning(name) bool
+        +runningCheck() IsRunning
+        +stop(name)
+        +rotate(name)
+        +send(name, data, lineEnding) bool
+        +captureOf(name) SerialProcess*
+        +portInUse(port) QString
         +ports() QStringList
         +refreshPorts()
         sessionStarted(port)
@@ -199,6 +204,7 @@ classDiagram
     }
 
     Sessions --> SerialProcess : creates & manages
+    ProfileStore ..> Sessions : asks isRunning(name)
     ProfileStore --> PortProfile : saves
     ProfileStore --> Defaults : saves
     PortProfile --> SerialConfig : has
@@ -257,7 +263,7 @@ file exists. Settings are saved as text (`8`, `1.5`, `even`,
 `rename()` and `remove()` return why they failed in words for the user, empty
 when they did, and emit `changed()` when they did; `remove()` and `rename()`
 refuse a configuration that captures (the plugin gives the store
-`Sessions::portOf()` to ask): its session's owner is its name, so renaming it
+`Sessions::runningCheck()` to ask): its session's owner is its name, so renaming it
 would part the tile from its capture. `rename(oldName, profile)` replaces the
 configuration where it is in the list, and refuses a name another one has.
 `newProfile()` proposes Configure's baud rate and timestamps, and the log
@@ -307,7 +313,8 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   lines written since the refresh before, divided by the time since then; a
   start counts from 0. Sizes and numbers are written in the user's locale.
   A stopped tile shows its main facts only: no details, but
-  `<port> is in use by "<name>"` while another configuration captures its
+  `<port> is in use by "<name>"` (`Sessions::portInUse()` of the port its
+  configuration has saved now) while another configuration captures its
   port.
 - **Live**: a `QTimer` calls `refresh()` once a second while
   `Sessions::activeSessionCount()` is above 0, and stops when the last
@@ -317,21 +324,25 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
 - **Controls** of a running tile (`controlsFor()`): a command field
   (`command`), the line ending (`lineEnding`: CRLF, LF, CR, none), ➤ Send
   (`send`; Return in the field too) and ↻ Rotate (`rotate`). Send calls
-  `Sessions::sendToSession(portOf(name), text, lineEnding)` and empties the
+  `Sessions::send(name, text, lineEnding)` and empties the
   field once it is sent; a failure is told by `Sessions`' notification and
-  the text stays. Rotate calls `Sessions::rotateSession(portOf(name))`. The
+  the text stays. Rotate calls `Sessions::rotate(name)`. The
   line ending chosen and the command typed but not sent yet are kept by name
   in the sidebar, so a tile rebuilt by a save or delete of another
   configuration keeps them; neither is saved with the configuration.
 - **A tile and its session.** Sessions are keyed by port: a port runs one
   capture at a time. Start passes the configuration's name as the session's
-  owner (`Sessions::startSession(config, savePath, owner)`), and the tile
-  finds its session with `Sessions::portOf(name)`, not through the port
-  saved in the configuration, which may have been edited while it runs (the
-  capture then goes on with the settings it started with, as the dialog
-  says, until it is stopped and started again). A second tile on a busy port
+  owner (`Sessions::startSession(config, savePath, owner)`), and from then
+  on the tile addresses it by that name — `Sessions::stop(name)`,
+  `rotate(name)`, `send(name, …)`, `captureOf(name)` for the live details —
+  not through the port saved in the configuration, which may have been
+  edited while it runs (the capture then goes on with the settings it
+  started with, as the dialog says, until it is stopped and started again).
+  For a name that captures nothing, as after its capture has just ended,
+  each of them does nothing and tells nothing; the sidebar keeps no port of
+  its own for a configuration. A second tile on a busy port
   is refused by `Sessions`, with a notification naming the configuration
-  that holds the port (`Sessions::ownerOf(port)`); no refusal is silent.
+  that holds the port; no refusal is silent.
 - **Start** finds the configuration in the store, says why when it cannot
   start (`startProblem()`), and starts its capture into a new file of its
   log directory (`savePathFor()`). **Delete** asks (`QMessageBox`), then

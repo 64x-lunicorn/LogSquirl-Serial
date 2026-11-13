@@ -779,7 +779,7 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
     }
 }
 
-SCENARIO( "a session remembers the configuration that started it", "[sessions]" )
+SCENARIO( "a session remembers the configuration that started it", "[sessions][byname]" )
 {
     GIVEN( "a session started by the configuration \"board\"" )
     {
@@ -788,21 +788,33 @@ SCENARIO( "a session remembers the configuration that started it", "[sessions]" 
         Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
 
-        THEN( "its port knows the configuration, and the configuration its port" )
+        THEN( "the configuration runs, its capture is the port's, and its port says by whom" )
         {
-            REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
-            REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
-            REQUIRE( sessions.portOf( "other" ).isEmpty() );
+            REQUIRE( sessions.isRunning( "board" ) );
+            REQUIRE_FALSE( sessions.isRunning( "other" ) );
+            REQUIRE_FALSE( sessions.isRunning( {} ) );
+            REQUIRE( sessions.captureOf( "board" ) == sessions.session( device.devicePath() ) );
+            REQUIRE( sessions.captureOf( "other" ) == nullptr );
+            REQUIRE( sessions.portInUse( device.devicePath() )
+                     == device.devicePath() + " is in use by “board”" );
+        }
+
+        THEN( "the store's check asks the same" )
+        {
+            const auto isRunning = sessions.runningCheck();
+            REQUIRE( isRunning( "board" ) );
+            REQUIRE_FALSE( isRunning( "other" ) );
         }
 
         WHEN( "it is stopped" )
         {
             sessions.stopSession( device.devicePath() );
 
-            THEN( "neither is remembered any more" )
+            THEN( "it is not remembered any more" )
             {
-                REQUIRE( sessions.ownerOf( device.devicePath() ).isEmpty() );
-                REQUIRE( sessions.portOf( "board" ).isEmpty() );
+                REQUIRE_FALSE( sessions.isRunning( "board" ) );
+                REQUIRE( sessions.captureOf( "board" ) == nullptr );
+                REQUIRE( sessions.portInUse( device.devicePath() ).isEmpty() );
             }
         }
 
@@ -816,15 +828,208 @@ SCENARIO( "a session remembers the configuration that started it", "[sessions]" 
                 session, "onPortError",
                 Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
 
-            THEN( "neither is remembered any more" )
+            THEN( "it is not remembered any more" )
             {
-                REQUIRE(
-                    waitFor( [ &sessions ]() { return sessions.portOf( "board" ).isEmpty(); } ) );
-                REQUIRE( sessions.ownerOf( device.devicePath() ).isEmpty() );
+                REQUIRE( waitFor( [ &sessions ]() { return !sessions.isRunning( "board" ); } ) );
+                REQUIRE( sessions.captureOf( "board" ) == nullptr );
+                REQUIRE( sessions.portInUse( device.devicePath() ).isEmpty() );
             }
         }
 
         sessions.stopAll();
+    }
+
+    GIVEN( "a session started without a configuration" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
+
+        THEN( "no configuration runs, and its port is in use by another capture" )
+        {
+            REQUIRE_FALSE( sessions.isRunning( {} ) );
+            REQUIRE( sessions.captureOf( {} ) == nullptr );
+            REQUIRE( sessions.portInUse( device.devicePath() )
+                     == device.devicePath() + " is in use by another capture" );
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a configuration's capture is stopped, rotated and sent to by its name",
+          "[sessions][byname]" )
+{
+    GIVEN( "the configuration \"board\" capturing a device, and \"console\" another" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        serial_test::PseudoTerminal otherDevice;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        auto config = configFor( device.devicePath() );
+        config.timestamps = false;
+        REQUIRE( sessions.startSession( config, logDir.filePath( "board.log" ), "board" ) );
+        REQUIRE( sessions.startSession( configFor( otherDevice.devicePath() ),
+                                        logDir.filePath( "console.log" ), "console" ) );
+        host.notifications.clear();
+        host.followedFiles.clear();
+
+        WHEN( "\"board\" is sent a command" )
+        {
+            const auto sent = sessions.send( "board", "status", serial_monitor::TxLineEnding::LF );
+
+            THEN( "its device receives it, and its log has it" )
+            {
+                REQUIRE( sent );
+                QByteArray received;
+                REQUIRE( waitFor( [ &device, &received ]() {
+                    received += device.receive();
+                    return received == "status\n";
+                } ) );
+                REQUIRE( waitFor( [ &sessions ]() {
+                    return sessions.captureOf( "board" )->totalLineCount() == 1;
+                } ) );
+            }
+        }
+
+        WHEN( "\"board\" is rotated" )
+        {
+            sessions.rotate( "board" );
+
+            THEN( "its capture goes on in a new file, the other's does not" )
+            {
+                REQUIRE( host.followedFiles.size() == 1 );
+                REQUIRE( sessions.captureOf( "board" )->rotationCount() == 1 );
+                REQUIRE( sessions.captureOf( "console" )->rotationCount() == 0 );
+            }
+        }
+
+        WHEN( "\"board\" is stopped" )
+        {
+            sessions.stop( "board" );
+
+            THEN( "its capture ends, the other's goes on" )
+            {
+                REQUIRE_FALSE( sessions.isRunning( "board" ) );
+                REQUIRE_FALSE( sessions.isSessionActive( device.devicePath() ) );
+                REQUIRE( sessions.isRunning( "console" ) );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith( "Serial capture stopped for "
+                                                                + device.devicePath() ) );
+            }
+        }
+
+        sessions.stopAll();
+    }
+}
+
+SCENARIO( "a configuration that does not capture is stopped, rotated and sent to quietly",
+          "[sessions][byname]" )
+{
+    GIVEN( "the configuration \"board\", whose capture has just ended" )
+    {
+        // Stopped, or ended on its own (its device unplugged).
+        const bool unplugged = GENERATE( false, true );
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ),
+                                        logDir.filePath( "board.log" ), "board" ) );
+        int stopped = 0;
+        int changed = 0;
+        QObject::connect( &sessions, &Sessions::sessionStopped,
+                          [ &stopped ]( const QString& ) { ++stopped; } );
+        QObject::connect( &sessions, &Sessions::sessionChanged,
+                          [ &changed ]( const QString& ) { ++changed; } );
+
+        if ( !unplugged ) {
+            sessions.stop( "board" );
+        }
+        else {
+            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
+            REQUIRE( session );
+            QMetaObject::invokeMethod(
+                session, "onPortError",
+                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+            REQUIRE( waitFor( [ &sessions ]() { return !sessions.isRunning( "board" ); } ) );
+        }
+
+        REQUIRE( stopped == 1 );
+        stopped = 0;
+        host.logs.clear();
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        THEN( "stopping, rotating and sending it do nothing, and tell nothing" )
+        {
+            sessions.stop( "board" );
+            sessions.rotate( "board" );
+            REQUIRE_FALSE( sessions.send( "board", "status", serial_monitor::TxLineEnding::LF ) );
+
+            REQUIRE( host.logs.isEmpty() );
+            REQUIRE( host.notifications.isEmpty() );
+            REQUIRE( host.openedFiles.isEmpty() );
+            REQUIRE( stopped == 0 );
+            REQUIRE( changed == 0 );
+            REQUIRE( sessions.captureOf( "board" ) == nullptr );
+        }
+
+        sessions.stopAll();
+    }
+
+    GIVEN( "a port captured by \"board\", and the configuration \"console\" on it, stopped" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        Sessions sessions( host );
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
+        host.logs.clear();
+        host.notifications.clear();
+        host.openedFiles.clear();
+
+        WHEN( "\"console\" is stopped, rotated and sent to" )
+        {
+            sessions.stop( "console" );
+            sessions.rotate( "console" );
+            const auto sent
+                = sessions.send( "console", "status", serial_monitor::TxLineEnding::LF );
+
+            THEN( "the capture of \"board\" goes on untouched, and nothing is told" )
+            {
+                REQUIRE_FALSE( sent );
+                REQUIRE( sessions.isRunning( "board" ) );
+                REQUIRE( sessions.captureOf( "board" )->rotationCount() == 0 );
+                REQUIRE( host.logs.isEmpty() );
+                REQUIRE( host.notifications.isEmpty() );
+                REQUIRE( host.openedFiles.isEmpty() );
+            }
+        }
+
+        sessions.stopAll();
+    }
+
+    GIVEN( "no capture at all" )
+    {
+        FakeHost host;
+        Sessions sessions( host );
+        host.logs.clear();
+
+        THEN( "stopping, rotating and sending a configuration, or none, tell nothing" )
+        {
+            for ( const QString& name : { QString( "board" ), QString() } ) {
+                sessions.stop( name );
+                sessions.rotate( name );
+                REQUIRE_FALSE( sessions.send( name, "status", serial_monitor::TxLineEnding::LF ) );
+                REQUIRE( sessions.captureOf( name ) == nullptr );
+                REQUIRE_FALSE( sessions.isRunning( name ) );
+            }
+            REQUIRE( host.logs.isEmpty() );
+            REQUIRE( host.notifications.isEmpty() );
+            REQUIRE( sessions.portInUse( "logsquirl-test-no-such-port" ).isEmpty() );
+        }
     }
 }
 
@@ -851,7 +1056,8 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( device.devicePath() ) );
                 REQUIRE( host.notifications.first().contains( "board" ) );
-                REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
+                REQUIRE( sessions.isRunning( "board" ) );
+                REQUIRE_FALSE( sessions.isRunning( "console" ) );
             }
         }
 

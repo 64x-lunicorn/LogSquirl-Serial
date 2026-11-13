@@ -31,9 +31,11 @@
  *
  * The sidebar (SidebarWidget) and its tiles are views of it: a tile starts
  * the session of its saved configuration (profiles.h), named as the
- * session's owner, and finds it again through portOf().  The views call
- * its methods and update on its signals.  Starting,
- * stopping and errors are notifications of the Host it is handed (host.h),
+ * session's owner, then stops, rotates, sends to and reads it by that name
+ * (stop(), rotate(), send(), captureOf()), which do nothing once it has
+ * ended.  The profile store asks it whether a configuration captures
+ * (runningCheck()).  The views call its methods and update on its signals.
+ * Starting, stopping and errors are notifications of the Host it is handed (host.h),
  * sent from here; a refusal is a Host::warn(), logged and notified; stopAll()
  * notifies nothing (the views say "All serial sessions stopped.", the
  * shutdown says nothing).
@@ -51,6 +53,7 @@
 
 #pragma once
 
+#include "profiles.h"
 #include "serialprocess.h"
 
 #include <QMap>
@@ -82,7 +85,8 @@ public:
      *
      * @param savePath  Optional path to a .log file for persistent saving.
      * @param owner     The saved configuration that starts it (profiles.h),
-     *                  if any: ownerOf() and portOf() tell it until it ends.
+     *                  if any: the calls by configuration name below find
+     *                  the session through it until it ends.
      * @return Whether the session started.
      */
     bool startSession( const SerialConfig& config, const QString& savePath = {},
@@ -134,20 +138,50 @@ public:
      */
     const SerialProcess* session( const QString& portName ) const;
 
-    /**
-     * The saved configuration whose session runs on @p portName (the owner
-     * given to startSession()); empty if the port has no session, or one
-     * started without a configuration.
-     */
-    QString ownerOf( const QString& portName ) const;
+    // ── By configuration ────────────────────────────────────────────────
+    //
+    // A saved configuration (profiles.h) knows its capture by its name, the
+    // owner given to startSession(), not by the port saved in it, which may
+    // have been edited since.  For a name that captures nothing (never
+    // started, stopped, ended on its own, or empty) each of these does
+    // nothing and tells nothing.
+
+    /** Whether the saved configuration @p name captures. */
+    bool isRunning( const QString& name ) const;
 
     /**
-     * The port of the session that the saved configuration @p owner
-     * started; empty if it runs none.  A tile finds its session this way,
-     * not through the port saved in its configuration, which may have been
-     * edited since.
+     * isRunning() as the profile store asks it before a rename or delete
+     * (ProfileStore::IsRunning); valid while this object lives.
      */
-    QString portOf( const QString& owner ) const;
+    ProfileStore::IsRunning runningCheck() const;
+
+    /** Stop the capture of the configuration @p name, as stopSession(). */
+    void stop( const QString& name );
+
+    /** Rotate the log of the configuration @p name's capture, as rotateSession(). */
+    void rotate( const QString& name );
+
+    /**
+     * Send @p data with @p lineEnding to the capture of the configuration
+     * @p name, as sendToSession().
+     *
+     * @return Whether it was sent; false if @p name captures nothing.
+     */
+    bool send( const QString& name, const QByteArray& data, TxLineEnding lineEnding );
+
+    /**
+     * The capture of the configuration @p name, to read its counters and
+     * settings, or nullptr if it runs none.  Valid until sessionStopped()
+     * for its port.
+     */
+    const SerialProcess* captureOf( const QString& name ) const;
+
+    /**
+     * Why @p portName cannot be captured now, as a tile shows it: "<port>
+     * is in use by “board”", or "… by another capture" for a session
+     * started without a configuration; empty if it has no session.
+     */
+    QString portInUse( const QString& portName ) const;
 
     /** Names of the ports found by the most recent scan. */
     const QStringList& ports() const
@@ -208,6 +242,9 @@ private:
 
     /** Scan the ports, and log how many there are. */
     QStringList scanPorts();
+
+    /** The port of the session the configuration @p name started; empty if none. */
+    QString portOf( const QString& name ) const;
 
     Host& host_;
     QStringList ports_; ///< Result of the last port scan.

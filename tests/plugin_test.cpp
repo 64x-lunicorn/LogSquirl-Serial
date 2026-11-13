@@ -697,6 +697,23 @@ SCENARIO( "a tile's capture stops when the plugin shuts down", "[plugin]" )
         REQUIRE( stateOf( sidebarTab( host )->tile( "board" ) ) == "running" );
         REQUIRE( host.followedFiles.size() == 1 );
 
+        WHEN( "its configuration is renamed in the dialog while it captures" )
+        {
+            sidebarTab( host )->tile( "board" )->findChild<QPushButton*>( "edit" )->click();
+            auto* dialog = portDialog();
+            dialog->findChild<QComboBox*>( "profile" )->setEditText( "console" );
+            dialog->findChild<QPushButton*>( "saveProfile" )->click();
+
+            THEN( "the plugin's store refuses, the capture asked whether it runs" )
+            {
+                REQUIRE( dialog->findChild<QLabel*>( "status" )->text().contains( "board" ) );
+                const serial_monitor::ProfileStore saved( host.configDir() );
+                REQUIRE( saved.find( "board" ) );
+                REQUIRE_FALSE( saved.find( "console" ) );
+                REQUIRE( stateOf( sidebarTab( host )->tile( "board" ) ) == "running" );
+            }
+        }
+
         WHEN( "the plugin is shut down" )
         {
             // What the parts show as the host lets go of the tab, the first

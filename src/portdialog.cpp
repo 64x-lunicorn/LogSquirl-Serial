@@ -340,7 +340,7 @@ void PortDialog::saveProfile()
                                    .arg( renamed, profile.name ) );
         return;
     }
-    if ( !sessions_->portOf( profile.name ).isEmpty() ) {
+    if ( sessions_->isRunning( profile.name ) ) {
         statusLabel_->setText( QStringLiteral( "Configuration %1 saved. Its capture runs on with "
                                                "the settings it started with: stop and start it "
                                                "to use the new ones." )

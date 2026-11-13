@@ -64,13 +64,18 @@ namespace {
 /// capture, as the plugin's.
 struct Store {
     Store( const FakeHost& host, Sessions& sessions )
-        : store( host.configDir(), [ &sessions ]( const QString& name ) {
-            return !sessions.portOf( name ).isEmpty();
-        } )
+        : store( host.configDir(), sessions.runningCheck() )
     {
     }
     ProfileStore store;
 };
+
+/// The port the configuration @p name captures; empty if none.
+QString portOf( const Sessions& sessions, const QString& name )
+{
+    const auto* capture = sessions.captureOf( name );
+    return capture ? capture->config().portName : QString();
+}
 
 PortProfile profileFor( const QString& name, const QString& port, const QString& logDir = {} )
 {
@@ -442,7 +447,7 @@ SCENARIO( "a tile starts and stops a capture of its port", "[sidebarwidget]" )
             THEN( "the port captures, into a new file in the log directory that a tab follows" )
             {
                 REQUIRE( sessions.isSessionActive( device.devicePath() ) );
-                REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+                REQUIRE( portOf( sessions, "board" ) == device.devicePath() );
                 REQUIRE( host.followedFiles.size() == 1 );
                 REQUIRE( QFileInfo( host.followedFiles.first() ).absolutePath()
                          == QFileInfo( logDir.path() ).absoluteFilePath() );
@@ -587,7 +592,7 @@ SCENARIO( "a second tile on a busy port is refused with a message", "[sidebarwid
                 .isEmpty() );
         SidebarWidget sidebar( host, &profiles.store, &sessions );
         click( sidebar.tile( "board" ), "startStop" );
-        REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+        REQUIRE( portOf( sessions, "board" ) == device.devicePath() );
         host.notifications.clear();
         host.openedFiles.clear();
 
@@ -604,8 +609,8 @@ SCENARIO( "a second tile on a busy port is refused with a message", "[sidebarwid
 
             THEN( "it is refused, with a notification that says why" )
             {
-                REQUIRE( sessions.portOf( "console" ).isEmpty() );
-                REQUIRE( sessions.ownerOf( device.devicePath() ) == "board" );
+                REQUIRE( portOf( sessions, "console" ).isEmpty() );
+                REQUIRE( portOf( sessions, "board" ) == device.devicePath() );
                 REQUIRE( host.openedFiles.isEmpty() );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "board" ) );
@@ -621,7 +626,7 @@ SCENARIO( "a second tile on a busy port is refused with a message", "[sidebarwid
             {
                 REQUIRE( textOf( sidebar.tile( "console" ), "details" ).isEmpty() );
                 click( sidebar.tile( "console" ), "startStop" );
-                REQUIRE( sessions.portOf( "console" ) == device.devicePath() );
+                REQUIRE( portOf( sessions, "console" ) == device.devicePath() );
             }
         }
 
@@ -680,7 +685,7 @@ SCENARIO( "a running tile shows its session's counters", "[sidebarwidget][counte
         QElapsedTimer sinceStart;
         sinceStart.start();
         click( sidebar.tile( "board" ), "startStop" );
-        REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+        REQUIRE( portOf( sessions, "board" ) == device.devicePath() );
         const auto* tile = sidebar.tile( "board" );
         const auto limit
             = sizeText( serial_monitor::kDefaultMaxFileMiB * serial_monitor::kBytesPerMiB );
@@ -846,7 +851,7 @@ SCENARIO( "a running tile sends a command to its port", "[sidebarwidget]" )
         SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
         click( sidebar.tile( "board" ), "startStop" );
-        REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
+        REQUIRE( portOf( sessions, "board" ) == device.devicePath() );
         const auto* tile = sidebar.tile( "board" );
         auto* command = tile->findChild<QLineEdit*>( "command" );
         auto* lineEnding = tile->findChild<QComboBox*>( "lineEnding" );

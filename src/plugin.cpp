@@ -258,7 +258,7 @@ Plugin::Plugin( const LogSquirlHostApi* api, void* handle, std::size_t apiSize,
     , hostApiSize_( apiSize )
     , temporaryFiles_( host_ )
     , profiles_( host_.configDir(),
-                 [ this ]( const QString& name ) { return !sessions_.portOf( name ).isEmpty(); } )
+                 [ this ]( const QString& name ) { return sessions_.isRunning( name ); } )
     // Scans the ports, once, for every view.
     , sessions_( host_ )
     // Parentless, so that it never goes with a main window that is

@@ -257,14 +257,57 @@ const SerialProcess* Sessions::session( const QString& portName ) const
     return sessions_.value( portName, nullptr );
 }
 
-QString Sessions::ownerOf( const QString& portName ) const
+// ── By configuration ────────────────────────────────────────────────────
+
+bool Sessions::isRunning( const QString& name ) const
 {
-    return owners_.value( portName );
+    return !portOf( name ).isEmpty();
 }
 
-QString Sessions::portOf( const QString& owner ) const
+ProfileStore::IsRunning Sessions::runningCheck() const
 {
-    return owner.isEmpty() ? QString() : owners_.key( owner );
+    return [ this ]( const QString& name ) { return isRunning( name ); };
+}
+
+void Sessions::stop( const QString& name )
+{
+    if ( const auto port = portOf( name ); !port.isEmpty() ) {
+        stopSession( port );
+    }
+}
+
+void Sessions::rotate( const QString& name )
+{
+    if ( const auto port = portOf( name ); !port.isEmpty() ) {
+        rotateSession( port );
+    }
+}
+
+bool Sessions::send( const QString& name, const QByteArray& data, TxLineEnding lineEnding )
+{
+    const auto port = portOf( name );
+    return !port.isEmpty() && sendToSession( port, data, lineEnding );
+}
+
+const SerialProcess* Sessions::captureOf( const QString& name ) const
+{
+    const auto port = portOf( name );
+    return port.isEmpty() ? nullptr : session( port );
+}
+
+QString Sessions::portInUse( const QString& portName ) const
+{
+    if ( !sessions_.contains( portName ) ) {
+        return {};
+    }
+    const auto owner = owners_.value( portName );
+    return owner.isEmpty() ? QString( "%1 is in use by another capture" ).arg( portName )
+                           : QString( "%1 is in use by “%2”" ).arg( portName, owner );
+}
+
+QString Sessions::portOf( const QString& name ) const
+{
+    return name.isEmpty() ? QString() : owners_.key( name );
 }
 
 void Sessions::refreshPorts()

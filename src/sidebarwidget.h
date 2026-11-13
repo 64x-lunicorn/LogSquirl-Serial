@@ -33,11 +33,14 @@
  * Tiles on different ports run at the same time, one session each
  * (sessions.h).
  *
- * A tile's session is the one Sessions knows it started (Sessions::portOf()
- * of its name), so a tile shows its capture as running also after its port
- * was changed in the dialog.  A tile whose port is captured by another
- * configuration says so in its details ("<port> is in use by …"); its Start
- * is refused by the sessions with a notification that says the same.
+ * A tile's session is the one Sessions knows it started: the tile stops,
+ * rotates, sends to and reads it by its configuration's name
+ * (Sessions::stop(), rotate(), send(), captureOf()), so a tile shows its
+ * capture as running also after its port was changed in the dialog, and a
+ * click on a capture that has just ended does nothing.  A tile whose port
+ * is captured by another configuration says so in its details
+ * (Sessions::portInUse(): "<port> is in use by …"); its Start is refused by
+ * the sessions with a notification that says the same.
  *
  * While its capture runs, a tile shows what it does, in its details:
  *
@@ -53,9 +56,9 @@
  * quits), ➤ Send (or Return) and ↻ Rotate.  The command typed and not sent
  * yet is kept per tile too, so a reload() after another configuration was
  * saved or deleted does not lose it.  Send writes the command to the
- * port the tile's session captures (Sessions::sendToSession()) and empties
+ * port the tile's session captures (Sessions::send()) and empties
  * the field; Rotate goes on in a new file and tab
- * (Sessions::rotateSession()).  A stopped tile shows its main facts only:
+ * (Sessions::rotate()).  A stopped tile shows its main facts only:
  * no details unless its port is in use, no controls.
  *
  * Edit… opens the dialog with the configuration and New configuration…
@@ -130,32 +133,24 @@ private:
     /// Start a capture of the configuration @p name, as its session's owner.
     void start( const QString& name );
 
-    /// Stop the capture the configuration @p name started.
-    void stop( const QString& name );
-
     /// Ask whether to delete the configuration @p name, and if so delete
     /// it, or say why it could not be.
     void confirmDelete( const QString& name );
 
-    /// Rotate the log of the capture the configuration @p name started.
-    void rotate( const QString& name );
-
-    /// Send the text of @p command with @p lineEnding to the port the
-    /// configuration @p name captures, and empty @p command once it is sent.
+    /// Send the text of @p command with @p lineEnding to the capture of the
+    /// configuration @p name, and empty @p command once it is sent.
     void sendFrom( const QString& name, QLineEdit* command, TxLineEnding lineEnding );
-
-    /// The session the configuration @p name started; nullptr if none runs.
-    const SerialProcess* sessionOf( const QString& name ) const;
 
     /// The tile controls of the configuration @p name's running capture:
     /// "command", "lineEnding", "send" and "rotate".
     QWidget* controlsFor( const QString& name );
 
-    /// Show what the configuration of @p tile captures, or why it cannot.
-    void updateTile( ConnectionTile* tile );
+    /// Show on @p tile what its configuration's @p capture does.
+    void showRunning( ConnectionTile* tile, const SerialProcess& capture );
 
     /// Update every tile and Stop all, after a session started, stopped or
-    /// rotated, and run the timer while some session runs.
+    /// rotated, and run the timer while some session runs: a running tile
+    /// shows what it does, a stopped one whether its port is in use.
     void updateTiles();
 
     Host& host_;
@@ -166,7 +161,6 @@ private:
     QVBoxLayout* tiles_;
     QTimer* timer_;
     QHash<QString, ConnectionTile*> tileByName_;
-    QHash<QString, QString> savedPortByName_; ///< The port each configuration has saved.
     /// The line ending chosen on each tile, kept when the tiles are rebuilt.
     QHash<QString, TxLineEnding> lineEndingByName_;
     /// The command typed on each tile and not sent yet, kept when the tiles

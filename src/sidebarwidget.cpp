@@ -185,23 +185,21 @@ ConnectionTile* SidebarWidget::tile( const QString& name ) const
 
 void SidebarWidget::refresh()
 {
+    // A stopped tile changes with a session's start or stop, which
+    // updateTiles() shows; only the running ones count.
     for ( auto* tile : std::as_const( tileByName_ ) ) {
-        const auto* session = sessionOf( tile->name() );
-        const auto sample = samples_.find( tile->name() );
-        if ( session && sample != samples_.end() ) {
-            const auto lines = session->totalLineCount();
+        const auto* capture = sessions_->captureOf( tile->name() );
+        if ( !capture ) {
+            continue;
+        }
+        if ( const auto sample = samples_.find( tile->name() ); sample != samples_.end() ) {
+            const auto lines = capture->totalLineCount();
             const auto elapsedMs = std::max<qint64>( sample->since.restart(), 1 );
             sample->rate = std::max<qint64>( lines - sample->lines, 0 ) * 1000 / elapsedMs;
             sample->lines = lines;
         }
-        updateTile( tile );
+        showRunning( tile, *capture );
     }
-}
-
-const SerialProcess* SidebarWidget::sessionOf( const QString& name ) const
-{
-    const auto port = sessions_->portOf( name );
-    return port.isEmpty() ? nullptr : sessions_->session( port );
 }
 
 QWidget* SidebarWidget::controlsFor( const QString& name )
@@ -277,21 +275,12 @@ QWidget* SidebarWidget::controlsFor( const QString& name )
             }
         } );
     } );
+    // sessionChanged() shows the new file on the tile.
     connect( rotateButton, &QPushButton::clicked, this, [ this, name ] {
-        guarded( host_, "rotating a serial capture's log", [ this, &name ] { rotate( name ); } );
+        guarded( host_, "rotating a serial capture's log",
+                 [ this, &name ] { sessions_->rotate( name ); } );
     } );
     return controls;
-}
-
-void SidebarWidget::rotate( const QString& name )
-{
-    // sessionChanged() shows the new file on the tile.
-    if ( const auto port = sessions_->portOf( name ); !port.isEmpty() ) {
-        sessions_->rotateSession( port );
-    }
-    else {
-        updateTiles(); // it ended meanwhile
-    }
 }
 
 void SidebarWidget::sendFrom( const QString& name, QLineEdit* command, TxLineEnding lineEnding )
@@ -300,18 +289,14 @@ void SidebarWidget::sendFrom( const QString& name, QLineEdit* command, TxLineEnd
     if ( text.isEmpty() ) {
         return;
     }
-    const auto port = sessions_->portOf( name );
-    if ( port.isEmpty() ) {
-        updateTiles(); // it ended meanwhile
-        return;
-    }
-    // A failure has been told by a notification; the command stays, to be
-    // sent again.
-    if ( sessions_->sendToSession( port, text.toUtf8(), lineEnding ) ) {
+    // A failure has been told by a notification, and a capture that has
+    // ended takes nothing; the command stays, to be sent again.
+    if ( sessions_->send( name, text.toUtf8(), lineEnding ) ) {
         command->clear();
     }
-    if ( auto* tile = tileByName_.value( name ) ) {
-        updateTile( tile ); // the [TX] line counts
+    auto* tile = tileByName_.value( name );
+    if ( const auto* capture = sessions_->captureOf( name ); tile && capture ) {
+        showRunning( tile, *capture ); // the [TX] line counts
     }
 }
 
@@ -323,7 +308,6 @@ void SidebarWidget::reload()
         tile->deleteLater();
     }
     tileByName_.clear();
-    savedPortByName_.clear();
 
     const auto profiles = profiles_->list();
     for ( const auto& profile : profiles ) {
@@ -334,8 +318,11 @@ void SidebarWidget::reload()
         connect( tile, &ConnectionTile::startClicked, this, [ this, name ] {
             guarded( host_, "starting a serial capture", [ this, &name ] { start( name ); } );
         } );
+        // sessionStopped() shows it stopped; a capture that has ended
+        // meanwhile has shown so already.
         connect( tile, &ConnectionTile::stopClicked, this, [ this, name ] {
-            guarded( host_, "stopping a serial capture", [ this, &name ] { stop( name ); } );
+            guarded( host_, "stopping a serial capture",
+                     [ this, &name ] { sessions_->stop( name ); } );
         } );
         connect( tile, &ConnectionTile::editClicked, this, [ this, name ] {
             guarded( host_, "editing a serial configuration",
@@ -347,7 +334,6 @@ void SidebarWidget::reload()
         } );
         tiles_->addWidget( tile );
         tileByName_.insert( name, tile );
-        savedPortByName_.insert( name, profile.serial.portName );
     }
     empty_->setVisible( profiles.isEmpty() );
     updateTiles();
@@ -370,16 +356,6 @@ void SidebarWidget::start( const QString& name )
                              savePathFor( *profile, profiles_->defaultLogDir() ), name );
 }
 
-void SidebarWidget::stop( const QString& name )
-{
-    if ( const auto port = sessions_->portOf( name ); !port.isEmpty() ) {
-        sessions_->stopSession( port );
-    }
-    else {
-        updateTiles(); // it ended meanwhile
-    }
-}
-
 void SidebarWidget::confirmDelete( const QString& name )
 {
     const auto answer
@@ -396,37 +372,37 @@ void SidebarWidget::confirmDelete( const QString& name )
     }
 }
 
-void SidebarWidget::updateTile( ConnectionTile* tile )
+void SidebarWidget::showRunning( ConnectionTile* tile, const SerialProcess& capture )
 {
     const auto name = tile->name();
-    if ( const auto* session = sessionOf( name ) ) {
-        auto sample = samples_.find( name );
-        if ( sample == samples_.end() ) {
-            // Started: the rate counts from here.
-            sample = samples_.insert( name, { session->totalLineCount(), 0, {} } );
-            sample->since.start();
-        }
-        tile->setState( TileState::Running );
-        tile->setDetails( detailsOf( *session, sample->rate ) );
-        return;
+    auto sample = samples_.find( name );
+    if ( sample == samples_.end() ) {
+        // Started: the rate counts from here.
+        sample = samples_.insert( name, { capture.totalLineCount(), 0, {} } );
+        sample->since.start();
     }
-    samples_.remove( name );
-    tile->setState( TileState::Stopped );
-    const auto port = savedPortByName_.value( name );
-    if ( !port.isEmpty() && sessions_->isSessionActive( port ) ) {
-        const auto owner = sessions_->ownerOf( port );
-        tile->setDetails( { owner.isEmpty()
-                                ? QStringLiteral( "%1 is in use by another capture" ).arg( port )
-                                : QStringLiteral( "%1 is in use by “%2”" ).arg( port, owner ) } );
-        return;
-    }
-    tile->setDetails( {} );
+    tile->setState( TileState::Running );
+    tile->setDetails( detailsOf( capture, sample->rate ) );
 }
 
 void SidebarWidget::updateTiles()
 {
+    // The ports saved now, for the stopped tiles whose port another
+    // configuration captures.
+    QHash<QString, QString> savedPorts;
+    for ( const auto& profile : profiles_->list() ) {
+        savedPorts.insert( profile.name, profile.serial.portName );
+    }
     for ( auto* tile : std::as_const( tileByName_ ) ) {
-        updateTile( tile );
+        const auto name = tile->name();
+        if ( const auto* capture = sessions_->captureOf( name ) ) {
+            showRunning( tile, *capture );
+            continue;
+        }
+        samples_.remove( name );
+        tile->setState( TileState::Stopped );
+        const auto inUse = sessions_->portInUse( savedPorts.value( name ) );
+        tile->setDetails( inUse.isEmpty() ? QStringList() : QStringList{ inUse } );
     }
     const bool anyRunning = sessions_->activeSessionCount() > 0;
     stopAll_->setEnabled( anyRunning );

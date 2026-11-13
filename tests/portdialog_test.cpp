@@ -57,11 +57,17 @@ namespace {
 struct World {
     explicit World( FakeHost& host )
         : sessions( host )
-        , profiles( host.configDir(),
-                    [ this ]( const QString& name ) { return !sessions.portOf( name ).isEmpty(); } )
+        , profiles( host.configDir(), sessions.runningCheck() )
         , dialog( &profiles, &sessions )
         , sidebar( host, &profiles, &sessions )
     {
+    }
+
+    /// The port the configuration @p name captures; empty if none.
+    QString portOf( const QString& name ) const
+    {
+        const auto* capture = sessions.captureOf( name );
+        return capture ? capture->config().portName : QString();
     }
 
     Sessions sessions;
@@ -432,7 +438,7 @@ SCENARIO( "saving a configuration that captures says the capture runs on", "[por
         child<QLineEdit>( world.dialog, "logDir" )->setText( host.tempRoot() + "/logs" );
         save( world.dialog );
         world.sidebar.tile( "board" )->findChild<QPushButton*>( "startStop" )->click();
-        REQUIRE( world.sessions.portOf( "board" ) == device.devicePath() );
+        REQUIRE( world.portOf( "board" ) == device.devicePath() );
 
         WHEN( "it is changed and saved" )
         {
@@ -443,7 +449,7 @@ SCENARIO( "saving a configuration that captures says the capture runs on", "[por
             THEN( "the dialog says the capture runs on with the settings it started with" )
             {
                 REQUIRE( statusOf( world.dialog ).contains( "runs on" ) );
-                REQUIRE( world.sessions.portOf( "board" ) == device.devicePath() );
+                REQUIRE( world.portOf( "board" ) == device.devicePath() );
             }
         }
 
@@ -474,7 +480,7 @@ SCENARIO( "saving a configuration that captures says the capture runs on", "[por
 
             THEN( "its tile keeps its running capture" )
             {
-                REQUIRE( world.sessions.portOf( "board" ) == device.devicePath() );
+                REQUIRE( world.portOf( "board" ) == device.devicePath() );
                 REQUIRE( world.sidebar.tile( "board" )
                              ->findChild<QLabel*>( "state" )
                              ->property( "state" )
