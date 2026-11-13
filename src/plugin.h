@@ -19,25 +19,19 @@
 
 /**
  * @file plugin.h
- * @brief Global plugin state shared across all translation units.
+ * @brief What the rest of the plugin may ask of the running plugin instance.
  *
- * This header centralises the host API pointer, the opaque handle, and
- * the sessions and the views of them.  It is the single source of truth for "is the
- * plugin initialised?" and "what is running?".
- *
- * DESIGN NOTE — why globals and not a class?
- * ------------------------------------------
- * The LogSquirl plugin ABI is pure C.  The host calls free functions
- * (logsquirl_plugin_init, logsquirl_plugin_shutdown, …) with no object
- * context.  A small, clearly scoped set of file-level globals is the
- * idiomatic way to bridge between the C entry points and the C++/Qt
- * implementation behind them.
+ * The LogSquirl plugin ABI is pure C: the host calls free functions
+ * (logsquirl_plugin_init_ex(), logsquirl_plugin_shutdown(), …) with no
+ * object context.  init() creates one plugin instance, which owns every
+ * part (plugin.cpp), and the entry points reach it through the one global
+ * pointer to it; shutdown() destroys it.  All of it happens on the main
+ * (GUI) thread, so no locking is necessary.
  */
 
 #pragma once
 
 #include "host.h"
-#include "logsquirl_plugin_api.h"
 
 #include <QString>
 
@@ -45,52 +39,27 @@
 #include <utility>
 
 namespace serial_monitor {
-class PortDialog;
-class ProfileStore;
-class Sessions;
-class SidebarWidget;
-} // namespace serial_monitor
 
-namespace serial_monitor {
+/// The Host of the running plugin instance; between instances, a detached
+/// one, which logs, notifies and opens nothing.
+Host& pluginHost() noexcept;
 
-/**
- * Global plugin state.
- *
- * Populated by logsquirl_plugin_init(), cleared by logsquirl_plugin_shutdown().
- * All fields are only accessed from the main (GUI) thread, so no locking
- * is necessary.
- */
-struct PluginState {
-    const LogSquirlHostApi* api = nullptr; ///< Host API function table.
-    void* handle = nullptr;                ///< Opaque plugin instance handle.
-    /// The Host the capture modules are handed: api and handle between
-    /// init() and shutdown(), detached (doing nothing) otherwise.
-    CApiHost host;
-    Sessions* sessions = nullptr;           ///< The running captures, which the views show.
-    ProfileStore* profiles = nullptr;       ///< serial.ini: defaults, configurations.
-    PortDialog* dialog = nullptr;           ///< The dialog that edits a saved configuration.
-    SidebarWidget* sidebarWidget = nullptr; ///< The sidebar tab: one tile per configuration.
-    bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
-    /// The size of the host's table (init_ex()): a function added after
-    /// LogSquirl 26.10 may be used only if LOGSQUIRL_HOST_API_HAS( hostApiSize,
-    /// member ) says the running host has it.  Never copy *api.
-    std::size_t hostApiSize = 0;
-    bool initialised = false; ///< True between init() and shutdown().
-    bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
-    /// Where init() puts the temporary directories (host.tempRoot()); empty:
-    /// the system's.  Set by the tests, before init().
-    QString tempRoot;
-};
+/// The size of the host's table (init_ex()) while the plugin runs, 0
+/// otherwise: a function added after LogSquirl 26.10 may be used only if
+/// LOGSQUIRL_HOST_API_HAS( hostApiSize(), member ) says the running host
+/// has it.  Never copy the table.
+std::size_t hostApiSize() noexcept;
 
-/// The single global instance — defined in plugin.cpp.
-extern PluginState g_state;
+/// Where the next init() puts the temporary directories (Host::tempRoot());
+/// empty: the system's.  For the tests.
+void setTempRootForTests( const QString& tempRoot );
 
-/// guarded() through the plugin's host (g_state.host): entry points and the
+/// guarded() through the plugin's host (pluginHost()): entry points and the
 /// slots of the parts not handed a Host (the dialog) go through it.
 template <typename Work>
 bool guarded( const char* what, Work&& work ) noexcept
 {
-    return guarded( g_state.host, what, std::forward<Work>( work ) );
+    return guarded( pluginHost(), what, std::forward<Work>( work ) );
 }
 
 } // namespace serial_monitor

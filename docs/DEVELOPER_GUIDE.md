@@ -30,10 +30,9 @@ sequenceDiagram
     Plugin-->>Host: &kPluginInfo (id, name, version, type, …)
 
     Host->>Plugin: logsquirl_plugin_init(api, handle)
-    Plugin->>Plugin: Store api + handle in g_state
-    Plugin->>Host: api->register_menu_action("Plugins", "Serial Monitor…", callback)
-    Plugin->>Plugin: Create Sessions, ProfileStore (serial.ini), PortDialog and SidebarWidget
+    Plugin->>Plugin: new Plugin: a CApiHost over api + handle, ProfileStore (serial.ini), Sessions, PortDialog and SidebarWidget
     Plugin->>Host: api->register_sidebar_tab("Serial", sidebarWidget)
+    Plugin->>Host: api->register_menu_action("Plugins", "Serial Monitor…", callback)
     Plugin-->>Host: return 0 (success)
 
     Note over Host,Plugin: User clicks "New configuration…" in the tab (or "Serial Monitor…" in Plugins)
@@ -57,21 +56,25 @@ sequenceDiagram
     Note over Host: Tab stays open with captured output
 
     Host->>Plugin: logsquirl_plugin_shutdown()
-    Plugin->>Plugin: delete sidebar, stopAll(), delete dialog, store and sessions, clear g_state
+    Plugin->>Plugin: delete the Plugin: stopAll(), then its members in reverse order
+    Plugin->>Host: api->unregister_sidebar_tab(sidebarWidget)
 ```
 
 ## Class Diagram
 
 ```mermaid
 classDiagram
-    class PluginState {
-        +LogSquirlHostApi* api
-        +void* handle
-        +Sessions* sessions
-        +ProfileStore* profiles
-        +PortDialog* dialog
-        +SidebarWidget* sidebarWidget
-        +bool initialised
+    class Plugin {
+        -CApiHost host_
+        -size_t hostApiSize_
+        -TemporaryFiles temporaryFiles_
+        -ProfileStore profiles_
+        -Sessions sessions_
+        -PortDialog dialog_
+        -OwnedWidget~SidebarWidget~ sidebar_
+        -SidebarTab sidebarTab_
+        +showDialog()
+        +configureDefaults(parent)
     }
 
     class SerialConfig {
@@ -205,11 +208,24 @@ classDiagram
     SidebarWidget --> Sessions : starts, stops, view of
     SerialProcess --> SerialConfig : uses
     SerialProcess --> CaptureLog : feeds bytes and commands
-    PluginState --> Sessions : owns
-    PluginState --> ProfileStore : owns
-    PluginState --> PortDialog : owns
-    PluginState --> SidebarWidget : owns
+    Plugin --> Sessions : owns
+    Plugin --> ProfileStore : owns
+    Plugin --> PortDialog : owns
+    Plugin --> SidebarWidget : owns
 ```
+
+The C entry points reach the parts through one global, a pointer to the
+`Plugin` that `init()` creates and `shutdown()` deletes
+([`src/plugin.cpp`](../src/plugin.cpp)). Its members are declared in the order
+they depend on each other — the host, the temporary files, the settings, the
+captures, the dialog, the sidebar, its tab registration — so destroying it
+unregisters the tab while its widget lives, and destroys each part before those
+it uses; its destructor first stops the captures, while every part that shows
+them is there. When LogSquirl quits (`aboutToQuit`), the temporary files go
+last, after the captures closed them. A failing `init()` undoes itself the same
+way: the members made so far go again, in reverse, as the exception leaves the
+constructor. The rest of the plugin asks `plugin.h` for the running host
+(`pluginHost()`) and the size of its table (`hostApiSize()`).
 
 The sidebar and the dialog hold no session state of their own: they call
 `Sessions` and refresh on its signals, and both stay in step when a session

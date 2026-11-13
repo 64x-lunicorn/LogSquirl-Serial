@@ -95,8 +95,13 @@ public:
             }
             host->sidebarTabs << widget;
         };
-        api_.unregister_sidebar_tab
-            = []( void* handle, void* widget ) { self( handle )->sidebarTabs.removeAll( widget ); };
+        api_.unregister_sidebar_tab = []( void* handle, void* widget ) {
+            auto* host = self( handle );
+            if ( host->onUnregisterSidebarTab ) {
+                host->onUnregisterSidebarTab( widget );
+            }
+            host->sidebarTabs.removeAll( widget );
+        };
     }
 
     FakeHost( const FakeHost& ) = delete;
@@ -157,6 +162,9 @@ public:
     QList<void*> sidebarTabs; ///< The widgets registered as sidebar tabs.
     /// register_sidebar_tab() throws, as a host out of room might.
     bool failSidebarTab = false;
+    /// Called by unregister_sidebar_tab() with the widget, before the tab
+    /// goes: to look at the plugin then, or to throw.
+    std::function<void( void* widget )> onUnregisterSidebarTab;
     /// configDir() and get_config_dir() give the config directory; empty
     /// (NULL), as a host without one does, when false.
     bool hasConfigDir = true;
