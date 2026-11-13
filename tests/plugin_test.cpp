@@ -49,7 +49,6 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QPushButton>
-#include <QSettings>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -139,8 +138,8 @@ SCENARIO( "the Configure dialog edits the default settings", "[plugin]" )
             THEN( "the dialog offers the setting and saves it" )
             {
                 REQUIRE( foundCheckBox );
-                QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-                REQUIRE_FALSE( settings.value( "serial/timestamps", true ).toBool() );
+                REQUIRE_FALSE(
+                    serial_monitor::ProfileStore( host.configDir() ).defaults().timestamps );
             }
 
             THEN( "a new configuration in the dialog proposes it" )
@@ -191,8 +190,8 @@ SCENARIO( "the Configure dialog sets the size at which log files are rotated", "
             {
                 REQUIRE( shownMiB == serial_monitor::kDefaultMaxFileMiB );
                 REQUIRE_FALSE( neverText.isEmpty() );
-                QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-                REQUIRE( settings.value( "serial/maxFileMiB" ).toInt() == 50 );
+                REQUIRE( serial_monitor::ProfileStore( host.configDir() ).defaults().maxFileMiB
+                         == 50 );
             }
         }
 

@@ -56,7 +56,7 @@ namespace {
 /// The dialog's and the sidebar's world: sessions, the store, both views.
 struct World {
     explicit World( const FakeHost& host )
-        : profiles( host.configDir() + "/serial.ini",
+        : profiles( host.configDir(),
                     [ this ]( const QString& name ) { return !sessions.portOf( name ).isEmpty(); } )
         , dialog( &profiles, &sessions )
         , sidebar( &profiles, &sessions )
@@ -343,7 +343,7 @@ SCENARIO( "the dialog shares the sessions' port list", "[portdialog]" )
     {
         FakeHost host;
         Sessions sessions;
-        ProfileStore profiles( host.configDir() + "/serial.ini" );
+        ProfileStore profiles( host.configDir() );
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
 
         WHEN( "the dialog is created" )
@@ -378,7 +378,7 @@ SCENARIO( "the empty log directory says where captures go", "[portdialog]" )
     {
         FakeHost host;
         Sessions sessions;
-        ProfileStore profiles( host.configDir() + "/serial.ini" );
+        ProfileStore profiles( host.configDir() );
         PortDialog dialog( &profiles, &sessions );
         auto* logDir = child<QLineEdit>( dialog, "logDir" );
 

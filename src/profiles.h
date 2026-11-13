@@ -29,18 +29,25 @@
  *
  * PROFILE STORE
  * ─────────────
- * Configurations are saved in serial.ini in the plugin's configuration
- * directory (get_config_dir), as the array "profiles", in the order they
- * were first saved, next to the defaults Configure saves (group "serial").
- * A ProfileStore opened on that file is their one owner: the dialog and the
- * sidebar list, find, save, rename and delete them through it, and it remembers the
- * log directory saved last, which a new configuration proposes (the key the
- * sidebar of earlier versions saved its log directory under).  When it
- * cannot save or delete, it says why, in words for the user.  It reads the
- * file on each call, so two stores on one file agree.
+ * A ProfileStore is the one owner of serial.ini in the plugin's
+ * configuration directory (get_config_dir), which it is given; no other
+ * code knows the file or its keys.  It holds:
  *
- * Tested on the configuration directory of a FakeHost (profiles_test.cpp),
- * and through the dialog and the sidebar.
+ *   - the defaults Configure saves (group "serial"): the baud rate and
+ *     timestamps a new configuration proposes, and the size at which a
+ *     log file is rotated, for every capture;
+ *   - the configurations, as the array "profiles", in the order they were
+ *     first saved: the dialog and the sidebar list, find, save, rename and
+ *     delete them through it;
+ *   - the log directory saved last, which a new configuration proposes
+ *     (the key the sidebar of earlier versions saved its log directory
+ *     under).
+ *
+ * When it cannot save or delete, it says why, in words for the user.  It
+ * reads the file on each call, so two stores on one file agree.
+ *
+ * Tested on a temporary directory, without a host (profiles_test.cpp), and
+ * through the dialog, the sidebar and Configure.
  */
 
 #pragma once
@@ -61,15 +68,22 @@ struct PortProfile {
     /// The port and its settings.  Its txLineEnding and maxFileBytes are
     /// not saved: the size limit is Configure's, for every capture.
     SerialConfig serial;
-    /// Where its captures are written; empty: defaultLogDir().
+    /// Where its captures are written; empty: ProfileStore::defaultLogDir().
     QString logDir;
 };
 
-/// Where a configuration without a log directory writes its captures:
-/// `logs` in the plugin's configuration directory, where they are kept.
-/// Empty without a configuration directory: each capture then writes to a
-/// temporary file, removed when LogSquirl quits.
-QString defaultLogDir();
+/// The settings of Configure: the baud rate and timestamps a new
+/// configuration proposes, and the size at which a log file is rotated,
+/// for every capture.  As constructed, those used when none are saved.
+struct Defaults {
+    qint32 baudRate = 115200;
+    bool timestamps = true;
+    /// Size in MiB at which a log file is rotated; 0: never.
+    int maxFileMiB = kDefaultMaxFileMiB;
+
+    /// The size limit in bytes, as SerialConfig::maxFileBytes takes it.
+    qint64 maxFileBytes() const;
+};
 
 /// The frame of @p config as a terminal shows it: "115200 8N1".
 QString frameOf( const SerialConfig& config );
@@ -81,19 +95,21 @@ QString flowControlName( QSerialPort::FlowControl flowControl );
 /// empty if nothing (whether its port opens shows at Start).
 QString startProblem( const PortProfile& profile );
 
-/// The session configuration of @p profile, with the size limit set in
-/// Configure.
-SerialConfig sessionConfig( const PortProfile& profile );
+/// The session configuration of @p profile, with the size limit of
+/// @p defaults (ProfileStore::defaults()).
+SerialConfig sessionConfig( const PortProfile& profile, const Defaults& defaults );
 
 /// A new log file for a capture of @p profile, named
-/// YYYY-MM-dd_HHmmss_<port>.log, in its log directory, which is created if
-/// it does not exist; empty when it has none and there is no default (a
-/// temporary file then).  A log directory that is not a full path is
-/// returned as it is, for SerialProcess::start() to refuse with a message.
-QString savePathFor( const PortProfile& profile );
+/// YYYY-MM-dd_HHmmss_<port>.log, in its log directory, or in
+/// @p defaultLogDir (ProfileStore::defaultLogDir()) when it has none, which
+/// is created if it does not exist; empty when both are (a temporary file
+/// then).  A log directory that is not a full path is returned as it is,
+/// for SerialProcess::start() to refuse with a message.
+QString savePathFor( const PortProfile& profile, const QString& defaultLogDir );
 
-/// The saved configurations of one settings file; the only code that reads
-/// or writes them.
+/// The settings file of one configuration directory: its defaults, its
+/// saved configurations and the log directory saved last; the only code
+/// that reads or writes them.
 class ProfileStore : public QObject {
     Q_OBJECT
 
@@ -101,14 +117,41 @@ public:
     /// Whether the configuration @p name captures: it is not deleted then.
     using IsRunning = std::function<bool( const QString& name )>;
 
-    /// The store of @p settingsFile, which need not exist yet; empty, the
-    /// store has no configuration and saves none (no host to say where).
-    /// @p isRunning tells which configurations capture; none if it is empty.
-    explicit ProfileStore( const QString& settingsFile, IsRunning isRunning = {},
+    /// The settings file in @p configDir; empty if it is (no host to say
+    /// where): "/serial.ini" would be the root of the filesystem.
+    static QString settingsFileIn( const QString& configDir );
+
+    /// The store of serial.ini in @p configDir, which need not exist yet;
+    /// empty, the store has the defaults and no configuration, and saves
+    /// nothing (no host to say where).  @p isRunning tells which
+    /// configurations capture; none if it is empty.
+    explicit ProfileStore( const QString& configDir, IsRunning isRunning = {},
                            QObject* parent = nullptr );
 
-    /// The file the store reads and writes.
+    /// The configuration directory the store was opened on.
+    QString configDir() const;
+
+    /// The file the store reads and writes; empty without a configuration
+    /// directory.
     QString settingsFile() const;
+
+    /// Where a configuration without a log directory writes its captures:
+    /// `logs` in the configuration directory, where they are kept.  Empty
+    /// without a configuration directory: each capture then writes to a
+    /// temporary file, removed when LogSquirl quits.
+    QString defaultLogDir() const;
+
+    /// The defaults saved in Configure; for each one not saved, that of
+    /// Defaults.
+    Defaults defaults() const;
+
+    /// Why the defaults cannot be saved at all, in words for the user;
+    /// empty if they can be tried (no configuration directory: nothing).
+    QString defaultsUnsavable() const;
+
+    /// Save @p defaults.  Empty if they were saved, else why not, in words
+    /// for the user.
+    QString saveDefaults( const Defaults& defaults );
 
     /// The saved configurations, in the order they were first saved.
     QList<PortProfile> list() const;
@@ -116,8 +159,8 @@ public:
     /// The configuration named @p name; empty if there is none.
     std::optional<PortProfile> find( const QString& name ) const;
 
-    /// The settings a new configuration starts with: the defaults of
-    /// Configure (baud rate, timestamps), and the log directory saved last.
+    /// The settings a new configuration starts with: the defaults()
+    /// (baud rate, timestamps), and the log directory saved last.
     PortProfile newProfile() const;
 
     /// Save @p profile under its name, replacing the configuration of that
@@ -145,6 +188,7 @@ private:
     /// directory to remember if set; whether the file was written.
     bool write( const QList<PortProfile>& profiles, const std::optional<QString>& logDir );
 
+    QString configDir_;
     QString settingsFile_;
     IsRunning isRunning_;
 };

@@ -36,7 +36,6 @@
 
 #include <QComboBox>
 #include <QLocale>
-#include <QSettings>
 
 #include <algorithm>
 
@@ -67,8 +66,9 @@ bool isSorted( const QList<int>& rates )
 
 void saveDefaultBaud( const FakeHost& host, int rate )
 {
-    QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-    settings.setValue( "serial/defaultBaud", rate );
+    serial_monitor::Defaults defaults;
+    defaults.baudRate = rate;
+    REQUIRE( ProfileStore( host.configDir() ).saveDefaults( defaults ).isEmpty() );
 }
 
 } // namespace
@@ -201,7 +201,7 @@ SCENARIO( "a custom default baud rate is proposed for a new configuration", "[ba
         WHEN( "the dialog sets up a new configuration" )
         {
             Sessions sessions;
-            ProfileStore profiles( host.configDir() + "/serial.ini" );
+            ProfileStore profiles( host.configDir() );
             PortDialog dialog( &profiles, &sessions );
             dialog.newConfiguration();
 

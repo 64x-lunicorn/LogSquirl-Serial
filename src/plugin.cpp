@@ -68,7 +68,6 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
-#include <QSettings>
 #include <QSpinBox>
 #include <QWindow>
 
@@ -181,19 +180,18 @@ static void createSidebar()
 /// configuration, the size at which a log file is rotated) and save them.
 static void configureDefaults( QWidget* parent )
 {
-    // Without a configuration directory the settings would go to
-    // "/serial.ini", the root of the filesystem: nothing can be saved.
-    const auto configDir = serial_monitor::SerialProcess::configDir();
-    if ( configDir.isEmpty() ) {
-        const auto message = QStringLiteral( "The Serial Monitor defaults cannot be changed: "
-                                             "LogSquirl gave the plugin no configuration "
-                                             "directory to save them in." );
-        serial_monitor::hostLog( LOGSQUIRL_LOG_WARNING, message );
-        serial_monitor::hostNotify( message );
+    auto* store = serial_monitor::g_state.profiles;
+    if ( !store ) {
+        return; // not initialised: nothing to configure
+    }
+    // Without a configuration directory nothing can be saved.
+    if ( const auto problem = store->defaultsUnsavable(); !problem.isEmpty() ) {
+        serial_monitor::hostLog( LOGSQUIRL_LOG_WARNING, problem );
+        serial_monitor::hostNotify( problem );
         return;
     }
 
-    const auto defaults = serial_monitor::SerialProcess::defaultConfig();
+    const auto defaults = store->defaults();
 
     QDialog dialog( parent );
     dialog.setWindowTitle( "Configure Serial Monitor" );
@@ -213,8 +211,7 @@ static void configureDefaults( QWidget* parent )
     maxFileSpin->setRange( 0, 1024 * 1024 ); // up to 1 TiB
     maxFileSpin->setSuffix( " MiB" );
     maxFileSpin->setSpecialValueText( "Never" );
-    maxFileSpin->setValue(
-        static_cast<int>( defaults.maxFileBytes / serial_monitor::kBytesPerMiB ) );
+    maxFileSpin->setValue( defaults.maxFileMiB );
     maxFileSpin->setToolTip( "When a log file reaches this size, the capture goes on in a new "
                              "file, opened in a new tab" );
     layout->addRow( "Start a new log file at:", maxFileSpin );
@@ -229,16 +226,13 @@ static void configureDefaults( QWidget* parent )
         return;
     }
 
-    QSettings settings( configDir + "/serial.ini", QSettings::IniFormat );
-    settings.setValue( "serial/defaultBaud", baudSpin->value() );
-    settings.setValue( "serial/timestamps", timestampCheckBox->isChecked() );
-    settings.setValue( "serial/maxFileMiB", maxFileSpin->value() );
-    settings.sync();
-    if ( settings.status() != QSettings::NoError ) {
-        const auto message = QString( "The Serial Monitor defaults could not be saved to %1." )
-                                 .arg( settings.fileName() );
-        serial_monitor::hostLog( LOGSQUIRL_LOG_ERROR, message );
-        serial_monitor::hostNotify( message );
+    serial_monitor::Defaults chosen;
+    chosen.baudRate = baudSpin->value();
+    chosen.timestamps = timestampCheckBox->isChecked();
+    chosen.maxFileMiB = maxFileSpin->value();
+    if ( const auto problem = store->saveDefaults( chosen ); !problem.isEmpty() ) {
+        serial_monitor::hostLog( LOGSQUIRL_LOG_ERROR, problem );
+        serial_monitor::hostNotify( problem );
         return;
     }
     serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
@@ -311,9 +305,8 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // scans the ports, once, for every view.
         auto* sessions = new serial_monitor::Sessions();
         serial_monitor::g_state.sessions = sessions;
-        const auto configDir = serial_monitor::SerialProcess::configDir();
         serial_monitor::g_state.profiles = new serial_monitor::ProfileStore(
-            configDir.isEmpty() ? QString() : configDir + "/serial.ini",
+            QString::fromUtf8( api->get_config_dir( handle ) ),
             [ sessions ]( const QString& name ) { return !sessions->portOf( name ).isEmpty(); } );
         serial_monitor::g_state.dialog
             = new serial_monitor::PortDialog( serial_monitor::g_state.profiles, sessions );

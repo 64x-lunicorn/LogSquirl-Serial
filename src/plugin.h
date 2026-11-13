@@ -63,7 +63,7 @@ struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     Sessions* sessions = nullptr;           ///< The running captures, which the views show.
-    ProfileStore* profiles = nullptr;       ///< The saved port configurations (serial.ini).
+    ProfileStore* profiles = nullptr;       ///< serial.ini: defaults, configurations.
     PortDialog* dialog = nullptr;           ///< The dialog that edits a saved configuration.
     SidebarWidget* sidebarWidget = nullptr; ///< The sidebar tab: one tile per configuration.
     bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.

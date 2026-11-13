@@ -46,9 +46,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QSettings>
 #include <QSignalBlocker>
-#include <QStandardPaths>
 
 #ifdef Q_OS_UNIX
 #include <cerrno>
@@ -130,14 +128,6 @@ SerialProcess::~SerialProcess()
 }
 
 // ── Static: port discovery ──────────────────────────────────────────────
-
-QString SerialProcess::configDir()
-{
-    if ( g_state.api && g_state.handle ) {
-        return QString::fromUtf8( g_state.api->get_config_dir( g_state.handle ) );
-    }
-    return QStandardPaths::writableLocation( QStandardPaths::TempLocation );
-}
 
 QStringList SerialProcess::discoverPorts()
 {
@@ -230,23 +220,6 @@ QByteArray SerialProcess::escapeControls( const QByteArray& line )
         }
     }
     return escaped;
-}
-
-SerialConfig SerialProcess::defaultConfig()
-{
-    SerialConfig cfg;
-
-    // Load persisted defaults from config if available
-    const auto cfgDir = configDir();
-    if ( !cfgDir.isEmpty() ) {
-        QSettings settings( cfgDir + "/serial.ini", QSettings::IniFormat );
-        cfg.baudRate = settings.value( "serial/defaultBaud", 115200 ).toInt();
-        cfg.timestamps = settings.value( "serial/timestamps", true ).toBool();
-        const auto maxFileMiB = settings.value( "serial/maxFileMiB", kDefaultMaxFileMiB ).toInt();
-        cfg.maxFileBytes = qMax( 0, maxFileMiB ) * kBytesPerMiB;
-    }
-
-    return cfg;
 }
 
 QString SerialProcess::absoluteUserPath( const QString& path )

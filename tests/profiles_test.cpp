@@ -19,27 +19,39 @@
 
 /**
  * @file profiles_test.cpp
- * @brief BDD tests for the saved port configurations and their store.
+ * @brief BDD tests for serial.ini: the defaults, the saved port
+ *        configurations and the log directory, and their store.
  *
- * The store is tested on the configuration directory of a FakeHost, the
- * file the plugin uses (serial.ini); through the dialog and the sidebar in
- * portdialog_test.cpp, sidebarwidget_test.cpp and plugin_test.cpp.
+ * The store is tested on a temporary directory, as the configuration
+ * directory, without a host; through the dialog, the sidebar and Configure
+ * in portdialog_test.cpp, sidebarwidget_test.cpp and plugin_test.cpp.
  */
 
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
 #include "profiles.h"
+#include "readonlydir.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
-#include <QSettings>
+#include <QTemporaryDir>
 
+using serial_monitor::Defaults;
 using serial_monitor::PortProfile;
 using serial_monitor::ProfileStore;
-using serial_test::FakeHost;
 
 namespace {
+
+/// Write @p text as the settings file in @p configDir, as a user's file
+/// is on disk.
+void writeIni( const QTemporaryDir& configDir, const QByteArray& text )
+{
+    QFile file( ProfileStore::settingsFileIn( configDir.path() ) );
+    REQUIRE( file.open( QIODevice::WriteOnly | QIODevice::Truncate ) );
+    REQUIRE( file.write( text ) == text.size() );
+}
 
 /// A configuration with every setting off its default.
 PortProfile boardProfile()
@@ -66,19 +78,14 @@ QStringList namesOf( const QList<PortProfile>& profiles )
     return names;
 }
 
-QString iniOf( const FakeHost& host )
-{
-    return host.configDir() + "/serial.ini";
-}
-
 } // namespace
 
 SCENARIO( "a saved configuration survives a restart", "[profiles]" )
 {
     GIVEN( "a store on the plugin's settings file" )
     {
-        FakeHost host;
-        ProfileStore store( iniOf( host ) );
+        QTemporaryDir configDir;
+        ProfileStore store( configDir.path() );
         REQUIRE( store.list().isEmpty() );
 
         WHEN( "a configuration is saved" )
@@ -87,7 +94,7 @@ SCENARIO( "a saved configuration survives a restart", "[profiles]" )
 
             THEN( "a store opened later on the same file finds every setting" )
             {
-                const ProfileStore later( iniOf( host ) );
+                const ProfileStore later( configDir.path() );
                 const auto found = later.find( "board" );
                 REQUIRE( found );
                 const auto expected = boardProfile();
@@ -108,8 +115,8 @@ SCENARIO( "configurations are saved, replaced and deleted by name", "[profiles]"
 {
     GIVEN( "a store with two configurations" )
     {
-        FakeHost host;
-        ProfileStore store( iniOf( host ) );
+        QTemporaryDir configDir;
+        ProfileStore store( configDir.path() );
         auto first = boardProfile();
         auto second = boardProfile();
         second.name = "console";
@@ -231,8 +238,8 @@ SCENARIO( "configurations are saved, replaced and deleted by name", "[profiles]"
 
     GIVEN( "a store that knows which configurations capture" )
     {
-        FakeHost host;
-        ProfileStore store( iniOf( host ), []( const QString& name ) {
+        QTemporaryDir configDir;
+        ProfileStore store( configDir.path(), []( const QString& name ) {
             return name == QStringLiteral( "board" );
         } );
         REQUIRE( store.upsert( boardProfile() ).isEmpty() );
@@ -263,9 +270,8 @@ SCENARIO( "configurations are saved, replaced and deleted by name", "[profiles]"
         }
     }
 
-    GIVEN( "a store without a settings file, as without a configuration directory" )
+    GIVEN( "a store without a configuration directory" )
     {
-        FakeHost host;
         ProfileStore store( {} );
 
         WHEN( "a configuration is saved" )
@@ -285,13 +291,12 @@ SCENARIO( "a new configuration proposes the defaults", "[profiles]" )
 {
     GIVEN( "defaults saved in Configure and a configuration saved with a log directory" )
     {
-        FakeHost host;
-        {
-            QSettings settings( iniOf( host ), QSettings::IniFormat );
-            settings.setValue( "serial/defaultBaud", 9600 );
-            settings.setValue( "serial/timestamps", false );
-        }
-        ProfileStore store( iniOf( host ) );
+        QTemporaryDir configDir;
+        ProfileStore store( configDir.path() );
+        Defaults defaults;
+        defaults.baudRate = 9600;
+        defaults.timestamps = false;
+        REQUIRE( store.saveDefaults( defaults ).isEmpty() );
         REQUIRE( store.upsert( boardProfile() ).isEmpty() );
 
         WHEN( "a new configuration is set up" )
@@ -309,18 +314,228 @@ SCENARIO( "a new configuration proposes the defaults", "[profiles]" )
             }
         }
     }
+}
 
-    GIVEN( "the log directory of the sidebar of earlier versions" )
+SCENARIO( "the defaults are saved in the configuration directory", "[profiles]" )
+{
+    GIVEN( "a configuration directory without saved defaults" )
     {
-        FakeHost host;
-        {
-            QSettings settings( iniOf( host ), QSettings::IniFormat );
-            settings.setValue( "serial/logDir", "/var/log/serial" );
-        }
-        ProfileStore store( iniOf( host ) );
+        QTemporaryDir configDir;
+        ProfileStore store( configDir.path() );
 
-        THEN( "a new configuration proposes it" )
+        THEN( "the defaults are 115200 baud, timestamps on, and a new file at the default size" )
         {
+            const auto defaults = store.defaults();
+            REQUIRE( defaults.baudRate == 115200 );
+            REQUIRE( defaults.timestamps );
+            REQUIRE( defaults.maxFileMiB == serial_monitor::kDefaultMaxFileMiB );
+            REQUIRE( defaults.maxFileBytes()
+                     == serial_monitor::kDefaultMaxFileMiB * serial_monitor::kBytesPerMiB );
+            REQUIRE( store.defaultsUnsavable().isEmpty() );
+        }
+
+        THEN( "its captures are kept in its logs folder" )
+        {
+            REQUIRE( store.settingsFile() == configDir.filePath( "serial.ini" ) );
+            REQUIRE( store.defaultLogDir() == configDir.filePath( "logs" ) );
+        }
+
+        WHEN( "other defaults are saved" )
+        {
+            Defaults saved;
+            saved.baudRate = 9600;
+            saved.timestamps = false;
+            saved.maxFileMiB = 5;
+            REQUIRE( store.saveDefaults( saved ).isEmpty() );
+
+            THEN( "a store opened later on the directory has them" )
+            {
+                const auto defaults = ProfileStore( configDir.path() ).defaults();
+                REQUIRE( defaults.baudRate == 9600 );
+                REQUIRE_FALSE( defaults.timestamps );
+                REQUIRE( defaults.maxFileMiB == 5 );
+            }
+
+            THEN( "a capture is rotated at their size, whatever its configuration" )
+            {
+                REQUIRE(
+                    serial_monitor::sessionConfig( boardProfile(), store.defaults() ).maxFileBytes
+                    == 5 * 1024 * 1024 );
+            }
+        }
+
+        WHEN( "the size limit is turned off" )
+        {
+            Defaults saved;
+            saved.maxFileMiB = 0;
+            REQUIRE( store.saveDefaults( saved ).isEmpty() );
+
+            THEN( "log files are never rotated by size" )
+            {
+                REQUIRE( store.defaults().maxFileBytes() == 0 );
+            }
+        }
+
+        WHEN( "defaults are saved next to a configuration" )
+        {
+            REQUIRE( store.upsert( boardProfile() ).isEmpty() );
+            Defaults saved;
+            saved.baudRate = 9600;
+            REQUIRE( store.saveDefaults( saved ).isEmpty() );
+
+            THEN( "each keeps the other" )
+            {
+                REQUIRE( store.find( "board" ) );
+                REQUIRE( store.find( "board" )->serial.baudRate == boardProfile().serial.baudRate );
+                REQUIRE( store.newProfile().logDir == boardProfile().logDir );
+                REQUIRE( store.upsert( boardProfile() ).isEmpty() );
+                REQUIRE( store.defaults().baudRate == 9600 );
+            }
+        }
+    }
+
+    GIVEN( "a store without a configuration directory" )
+    {
+        ProfileStore store( {} );
+
+        THEN( "it falls back to the defaults, and captures to temporary files" )
+        {
+            const auto defaults = store.defaults();
+            REQUIRE( defaults.baudRate == Defaults().baudRate );
+            REQUIRE( defaults.timestamps == Defaults().timestamps );
+            REQUIRE( defaults.maxFileMiB == Defaults().maxFileMiB );
+            REQUIRE( store.settingsFile().isEmpty() );
+            REQUIRE( store.defaultLogDir().isEmpty() );
+        }
+
+        THEN( "it says why the defaults cannot be saved, and saves none" )
+        {
+            REQUIRE( store.defaultsUnsavable().contains( "no configuration directory" ) );
+            Defaults saved;
+            saved.baudRate = 9600;
+            REQUIRE( store.saveDefaults( saved ) == store.defaultsUnsavable() );
+            REQUIRE( store.defaults().baudRate == 115200 );
+        }
+    }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "a configuration directory that cannot be written" )
+    {
+        if ( !serial_test::ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+        QTemporaryDir configDir;
+        ProfileStore store( configDir.path() );
+
+        WHEN( "defaults are saved" )
+        {
+            Defaults saved;
+            saved.timestamps = false;
+            QString problem;
+            {
+                const serial_test::ReadOnlyDir readOnly( configDir.path() );
+                problem = store.saveDefaults( saved );
+            }
+
+            THEN( "the store says they could not be saved, and where, and keeps the old ones" )
+            {
+                REQUIRE( problem.contains( "could not be saved" ) );
+                REQUIRE( problem.contains( store.settingsFile() ) );
+                REQUIRE( store.defaults().timestamps );
+            }
+        }
+    }
+#endif
+}
+
+SCENARIO( "a serial.ini of earlier versions loads as it did", "[profiles]" )
+{
+    GIVEN( "the serial.ini of 0.6.0: the defaults and the sidebar's log directory" )
+    {
+        QTemporaryDir configDir;
+        writeIni( configDir, "[serial]\n"
+                             "defaultBaud=9600\n"
+                             "timestamps=false\n"
+                             "logDir=/var/log/serial\n" );
+        ProfileStore store( configDir.path() );
+
+        THEN( "its defaults are loaded, with the default size limit, which it had not" )
+        {
+            const auto defaults = store.defaults();
+            REQUIRE( defaults.baudRate == 9600 );
+            REQUIRE_FALSE( defaults.timestamps );
+            REQUIRE( defaults.maxFileMiB == serial_monitor::kDefaultMaxFileMiB );
+        }
+
+        THEN( "it has no configuration, and a new one proposes its defaults and log directory" )
+        {
+            REQUIRE( store.list().isEmpty() );
+            const auto profile = store.newProfile();
+            REQUIRE( profile.serial.baudRate == 9600 );
+            REQUIRE_FALSE( profile.serial.timestamps );
+            REQUIRE( profile.logDir == "/var/log/serial" );
+        }
+    }
+
+    GIVEN( "a serial.ini with a size limit and saved configurations" )
+    {
+        QTemporaryDir configDir;
+        writeIni( configDir, "[serial]\n"
+                             "defaultBaud=57600\n"
+                             "timestamps=true\n"
+                             "maxFileMiB=50\n"
+                             "logDir=/var/log/serial\n"
+                             "\n"
+                             "[profiles]\n"
+                             "1\\name=board\n"
+                             "1\\port=/dev/ttyUSB0\n"
+                             "1\\baudRate=74880\n"
+                             "1\\dataBits=7\n"
+                             "1\\stopBits=2\n"
+                             "1\\parity=even\n"
+                             "1\\flowControl=rtscts\n"
+                             "1\\timestamps=false\n"
+                             "1\\logDir=/var/log/board\n"
+                             "2\\name=console\n"
+                             "2\\port=COM3\n"
+                             "2\\baudRate=9600\n"
+                             "2\\dataBits=8\n"
+                             "2\\stopBits=1.5\n"
+                             "2\\parity=odd\n"
+                             "2\\flowControl=xonxoff\n"
+                             "2\\timestamps=true\n"
+                             "2\\logDir=\n"
+                             "size=2\n" );
+        ProfileStore store( configDir.path() );
+
+        THEN( "the defaults and every setting of each configuration are loaded, in order" )
+        {
+            const auto defaults = store.defaults();
+            REQUIRE( defaults.baudRate == 57600 );
+            REQUIRE( defaults.timestamps );
+            REQUIRE( defaults.maxFileMiB == 50 );
+
+            const auto profiles = store.list();
+            REQUIRE( namesOf( profiles ) == QStringList{ "board", "console" } );
+            const auto& board = profiles.at( 0 );
+            REQUIRE( board.serial.portName == "/dev/ttyUSB0" );
+            REQUIRE( board.serial.baudRate == 74880 );
+            REQUIRE( board.serial.dataBits == QSerialPort::Data7 );
+            REQUIRE( board.serial.stopBits == QSerialPort::TwoStop );
+            REQUIRE( board.serial.parity == QSerialPort::EvenParity );
+            REQUIRE( board.serial.flowControl == QSerialPort::HardwareControl );
+            REQUIRE_FALSE( board.serial.timestamps );
+            REQUIRE( board.logDir == "/var/log/board" );
+            const auto& console = profiles.at( 1 );
+            REQUIRE( console.serial.portName == "COM3" );
+            REQUIRE( console.serial.baudRate == 9600 );
+            REQUIRE( console.serial.dataBits == QSerialPort::Data8 );
+            REQUIRE( console.serial.stopBits == QSerialPort::OneAndHalfStop );
+            REQUIRE( console.serial.parity == QSerialPort::OddParity );
+            REQUIRE( console.serial.flowControl == QSerialPort::SoftwareControl );
+            REQUIRE( console.serial.timestamps );
+            REQUIRE( console.logDir.isEmpty() );
             REQUIRE( store.newProfile().logDir == "/var/log/serial" );
         }
     }
@@ -330,21 +545,17 @@ SCENARIO( "settings that are no settings load as the defaults", "[profiles]" )
 {
     GIVEN( "a configuration with a broken entry for each setting" )
     {
-        FakeHost host;
-        {
-            QSettings settings( iniOf( host ), QSettings::IniFormat );
-            settings.beginWriteArray( "profiles" );
-            settings.setArrayIndex( 0 );
-            settings.setValue( "name", "broken" );
-            settings.setValue( "port", "COM3" );
-            settings.setValue( "baudRate", "fast" );
-            settings.setValue( "dataBits", 9 );
-            settings.setValue( "stopBits", "3" );
-            settings.setValue( "parity", "sometimes" );
-            settings.setValue( "flowControl", "both" );
-            settings.endArray();
-        }
-        ProfileStore store( iniOf( host ) );
+        QTemporaryDir configDir;
+        writeIni( configDir, "[profiles]\n"
+                             "1\\name=broken\n"
+                             "1\\port=COM3\n"
+                             "1\\baudRate=fast\n"
+                             "1\\dataBits=9\n"
+                             "1\\stopBits=3\n"
+                             "1\\parity=sometimes\n"
+                             "1\\flowControl=both\n"
+                             "size=1\n" );
+        ProfileStore store( configDir.path() );
 
         WHEN( "it is loaded" )
         {
@@ -453,28 +664,29 @@ SCENARIO( "a configuration says what keeps it from starting", "[profiles]" )
 
 SCENARIO( "a configuration's capture goes to its log directory", "[profiles]" )
 {
-    GIVEN( "a host with a configuration directory" )
+    GIVEN( "a store on a configuration directory" )
     {
-        FakeHost host;
+        QTemporaryDir configDir;
+        const ProfileStore store( configDir.path() );
         PortProfile profile;
         profile.serial.portName = "/dev/ttyUSB0";
 
         WHEN( "the configuration has no log directory" )
         {
-            const auto path = serial_monitor::savePathFor( profile );
+            const auto path = serial_monitor::savePathFor( profile, store.defaultLogDir() );
 
             THEN( "the capture goes to the logs folder of the configuration directory" )
             {
-                REQUIRE( QFileInfo( path ).absolutePath()
-                         == QDir( host.configDir() ).filePath( "logs" ) );
+                REQUIRE( QFileInfo( path ).absolutePath() == configDir.filePath( "logs" ) );
                 REQUIRE( QFileInfo( path ).fileName().endsWith( "_ttyUSB0.log" ) );
             }
         }
 
         WHEN( "the configuration has a log directory that does not exist yet" )
         {
-            profile.logDir = host.tempRoot() + "/captures";
-            const auto path = serial_monitor::savePathFor( profile );
+            QTemporaryDir root;
+            profile.logDir = root.filePath( "captures" );
+            const auto path = serial_monitor::savePathFor( profile, store.defaultLogDir() );
 
             THEN( "the directory is created, and the capture goes there" )
             {
@@ -484,16 +696,15 @@ SCENARIO( "a configuration's capture goes to its log directory", "[profiles]" )
         }
     }
 
-    GIVEN( "a host without a configuration directory" )
+    GIVEN( "a store without a configuration directory" )
     {
-        FakeHost host;
-        host.hasConfigDir = false;
+        const ProfileStore store( {} );
         PortProfile profile;
         profile.serial.portName = "/dev/ttyUSB0";
 
         THEN( "a configuration without a log directory captures to a temporary file" )
         {
-            REQUIRE( serial_monitor::savePathFor( profile ).isEmpty() );
+            REQUIRE( serial_monitor::savePathFor( profile, store.defaultLogDir() ).isEmpty() );
         }
     }
 }

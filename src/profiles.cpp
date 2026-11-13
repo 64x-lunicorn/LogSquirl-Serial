@@ -35,7 +35,17 @@ namespace serial_monitor {
 
 namespace {
 
+// The keys of serial.ini, here only.  Users' files have them since 0.6.0
+// (the size limit since 0.7.0): they are not renamed.
+
+constexpr const char* kSettingsFileName = "serial.ini";
+
 constexpr const char* kProfiles = "profiles";
+
+/// The defaults of Configure.
+constexpr const char* kDefaultBaudKey = "serial/defaultBaud";
+constexpr const char* kTimestampsKey = "serial/timestamps";
+constexpr const char* kMaxFileMiBKey = "serial/maxFileMiB";
 
 /// The log directory saved last: where the sidebar of earlier versions
 /// saved its one log directory, so a new configuration proposes it.
@@ -99,10 +109,9 @@ Value valueFor( const std::array<Named<Value>, N>& table, const QString& saved, 
 
 } // namespace
 
-QString defaultLogDir()
+qint64 Defaults::maxFileBytes() const
 {
-    const auto cfgDir = SerialProcess::configDir();
-    return cfgDir.isEmpty() ? QString() : cfgDir + "/logs";
+    return qMax( 0, maxFileMiB ) * kBytesPerMiB;
 }
 
 QString frameOf( const SerialConfig& config )
@@ -135,18 +144,18 @@ QString startProblem( const PortProfile& profile )
     return {};
 }
 
-SerialConfig sessionConfig( const PortProfile& profile )
+SerialConfig sessionConfig( const PortProfile& profile, const Defaults& defaults )
 {
     auto config = profile.serial;
-    config.maxFileBytes = SerialProcess::defaultConfig().maxFileBytes;
+    config.maxFileBytes = defaults.maxFileBytes();
     return config;
 }
 
-QString savePathFor( const PortProfile& profile )
+QString savePathFor( const PortProfile& profile, const QString& defaultLogDir )
 {
     auto dir = profile.logDir.trimmed();
     if ( dir.isEmpty() ) {
-        dir = defaultLogDir();
+        dir = defaultLogDir;
         if ( dir.isEmpty() ) {
             return {};
         }
@@ -164,16 +173,71 @@ QString savePathFor( const PortProfile& profile )
 
 // ── The store ───────────────────────────────────────────────────────────
 
-ProfileStore::ProfileStore( const QString& settingsFile, IsRunning isRunning, QObject* parent )
+QString ProfileStore::settingsFileIn( const QString& configDir )
+{
+    return configDir.isEmpty() ? QString() : QDir( configDir ).filePath( kSettingsFileName );
+}
+
+ProfileStore::ProfileStore( const QString& configDir, IsRunning isRunning, QObject* parent )
     : QObject( parent )
-    , settingsFile_( settingsFile )
+    , configDir_( configDir )
+    , settingsFile_( settingsFileIn( configDir ) )
     , isRunning_( std::move( isRunning ) )
 {
+}
+
+QString ProfileStore::configDir() const
+{
+    return configDir_;
 }
 
 QString ProfileStore::settingsFile() const
 {
     return settingsFile_;
+}
+
+QString ProfileStore::defaultLogDir() const
+{
+    return configDir_.isEmpty() ? QString() : configDir_ + "/logs";
+}
+
+Defaults ProfileStore::defaults() const
+{
+    Defaults defaults;
+    if ( settingsFile_.isEmpty() ) {
+        return defaults;
+    }
+    const QSettings settings( settingsFile_, QSettings::IniFormat );
+    defaults.baudRate = settings.value( kDefaultBaudKey, defaults.baudRate ).toInt();
+    defaults.timestamps = settings.value( kTimestampsKey, defaults.timestamps ).toBool();
+    defaults.maxFileMiB = settings.value( kMaxFileMiBKey, defaults.maxFileMiB ).toInt();
+    return defaults;
+}
+
+QString ProfileStore::defaultsUnsavable() const
+{
+    if ( settingsFile_.isEmpty() ) {
+        return QStringLiteral( "The Serial Monitor defaults cannot be changed: LogSquirl gave the "
+                               "plugin no configuration directory to save them in." );
+    }
+    return {};
+}
+
+QString ProfileStore::saveDefaults( const Defaults& defaults )
+{
+    if ( const auto problem = defaultsUnsavable(); !problem.isEmpty() ) {
+        return problem;
+    }
+    QSettings settings( settingsFile_, QSettings::IniFormat );
+    settings.setValue( kDefaultBaudKey, defaults.baudRate );
+    settings.setValue( kTimestampsKey, defaults.timestamps );
+    settings.setValue( kMaxFileMiBKey, defaults.maxFileMiB );
+    settings.sync();
+    if ( settings.status() != QSettings::NoError ) {
+        return QStringLiteral( "The Serial Monitor defaults could not be saved to %1." )
+            .arg( settings.fileName() );
+    }
+    return {};
 }
 
 QList<PortProfile> ProfileStore::list() const
@@ -226,7 +290,7 @@ std::optional<PortProfile> ProfileStore::find( const QString& name ) const
 PortProfile ProfileStore::newProfile() const
 {
     PortProfile profile;
-    const auto defaults = SerialProcess::defaultConfig();
+    const auto defaults = this->defaults();
     profile.serial.baudRate = defaults.baudRate;
     profile.serial.timestamps = defaults.timestamps;
     if ( !settingsFile_.isEmpty() ) {

@@ -21,8 +21,8 @@
  * @file serialprocess_test.cpp
  * @brief BDD tests for SerialProcess instance behaviour.
  *
- * Tests basic construction, property accessors, default configuration,
- * and configDir fallback without requiring real serial hardware.  The
+ * Tests basic construction, property accessors and the default
+ * configuration without requiring real serial hardware.  The
  * scenarios that need an open port use a pseudo-terminal as the device
  * (see pseudoterminal.h) and only run on Unix.
  */
@@ -40,7 +40,6 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
-#include <QSettings>
 #include <QTemporaryDir>
 
 #ifdef Q_OS_UNIX
@@ -104,12 +103,11 @@ SCENARIO( "SerialProcess construction and properties", "[serialprocess]" )
     }
 }
 
-SCENARIO( "defaultConfig returns sensible defaults", "[serialprocess]" )
+SCENARIO( "a configuration has sensible defaults", "[serialprocess]" )
 {
-    GIVEN( "a plugin config directory without saved defaults" )
+    GIVEN( "a configuration as constructed" )
     {
-        FakeHost host;
-        const auto cfg = SerialProcess::defaultConfig();
+        const SerialConfig cfg;
 
         THEN( "the baud rate is 115200" )
         {
@@ -144,66 +142,6 @@ SCENARIO( "defaultConfig returns sensible defaults", "[serialprocess]" )
         THEN( "a log file is rotated at the default size" )
         {
             REQUIRE( cfg.maxFileBytes == serial_monitor::kDefaultMaxFileMiB * 1024 * 1024 );
-        }
-    }
-}
-
-SCENARIO( "defaultConfig applies the saved defaults", "[serialprocess]" )
-{
-    GIVEN( "defaults saved through the Configure dialog" )
-    {
-        FakeHost host;
-        {
-            QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-            settings.setValue( "serial/defaultBaud", 9600 );
-            settings.setValue( "serial/timestamps", false );
-            settings.setValue( "serial/maxFileMiB", 5 );
-        }
-
-        WHEN( "reading the default configuration" )
-        {
-            const auto cfg = SerialProcess::defaultConfig();
-
-            THEN( "the saved baud rate, timestamp setting and size limit are used" )
-            {
-                REQUIRE( cfg.baudRate == 9600 );
-                REQUIRE_FALSE( cfg.timestamps );
-                REQUIRE( cfg.maxFileBytes == 5 * 1024 * 1024 );
-            }
-        }
-    }
-
-    GIVEN( "a size limit turned off" )
-    {
-        FakeHost host;
-        {
-            QSettings settings( host.configDir() + "/serial.ini", QSettings::IniFormat );
-            settings.setValue( "serial/maxFileMiB", 0 );
-        }
-
-        THEN( "log files are never rotated by size" )
-        {
-            REQUIRE( SerialProcess::defaultConfig().maxFileBytes == 0 );
-        }
-    }
-}
-
-SCENARIO( "configDir falls back to temp when plugin is not initialised", "[serialprocess]" )
-{
-    GIVEN( "an uninitialised plugin state" )
-    {
-        // Ensure the global state is cleared (it should be by default in tests)
-        serial_monitor::g_state.api = nullptr;
-        serial_monitor::g_state.handle = nullptr;
-
-        WHEN( "configDir is called" )
-        {
-            const auto dir = SerialProcess::configDir();
-
-            THEN( "a non-empty fallback path is returned" )
-            {
-                REQUIRE_FALSE( dir.isEmpty() );
-            }
         }
     }
 }

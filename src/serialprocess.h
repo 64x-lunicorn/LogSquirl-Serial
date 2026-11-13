@@ -192,13 +192,6 @@ public:
     static QByteArray escapeControls( const QByteArray& line );
 
     /**
-     * Return a sensible default configuration (115200 8N1, no FC, timestamps on,
-     * rotation at kDefaultMaxFileMiB), with the defaults saved through the
-     * Configure dialog applied.
-     */
-    static SerialConfig defaultConfig();
-
-    /**
      * Return a path for a new log file in @p dir, named
      * `<yyyy-MM-dd_HHmmss>_<port>.log`.  Characters of the port name that
      * are not valid in file names (the '/' of "/dev/ttyUSB0") are
@@ -213,12 +206,6 @@ public:
      */
     static QString generateLogPath( const QString& dir, const QString& portName,
                                     const QDateTime& timestamp = QDateTime::currentDateTime() );
-
-    /**
-     * Return the plugin's config directory from the host API.
-     * Falls back to a temp path if the plugin is not initialised.
-     */
-    static QString configDir();
 
     /**
      * The path a user typed, made absolute: a leading `~` is the home

@@ -36,7 +36,7 @@
  *     bits, parity and flow control
  *   - whether each line gets a [YYYY-MM-DD HH:mm:ss.zzz] timestamp
  *   - the log directory; empty, `logs` in the plugin's configuration
- *     directory (profiles.h, defaultLogDir())
+ *     directory (profiles.h, ProfileStore::defaultLogDir())
  *   - a status line: what was saved, or what is missing
  *
  * The captures are started and stopped from their tiles in the sidebar
@@ -45,7 +45,7 @@
  * SETTINGS
  * ────────
  * The configurations are saved by name through the profile store
- * (profiles.h), the one owner of their part of serial.ini; the dialog reads
+ * (profiles.h), the one owner of serial.ini; the dialog reads
  * and writes no file itself.  A new configuration proposes the defaults of
  * Configure and the log directory saved last.  The list of names follows
  * the store, also when a configuration is deleted from its tile.

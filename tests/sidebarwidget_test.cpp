@@ -64,7 +64,7 @@ namespace {
 /// capture, as the plugin's.
 struct Store {
     Store( const FakeHost& host, Sessions& sessions )
-        : store( host.configDir() + "/serial.ini", [ &sessions ]( const QString& name ) {
+        : store( host.configDir(), [ &sessions ]( const QString& name ) {
             return !sessions.portOf( name ).isEmpty();
         } )
     {

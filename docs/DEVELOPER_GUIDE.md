@@ -106,8 +106,6 @@ classDiagram
         +startTime() QDateTime
         +discoverPorts()$ QStringList
         +filterPorts()$ QStringList
-        +defaultConfig()$ SerialConfig
-        +configDir()$ QString
     }
 
     class Sessions {
@@ -138,7 +136,17 @@ classDiagram
         +QString logDir
     }
 
+    class Defaults {
+        +qint32 baudRate
+        +bool timestamps
+        +int maxFileMiB
+    }
+
     class ProfileStore {
+        +ProfileStore(configDir, isRunning)
+        +defaults() Defaults
+        +saveDefaults(defaults) QString
+        +defaultLogDir() QString
         +list() QList~PortProfile~
         +find(name) optional~PortProfile~
         +newProfile() PortProfile
@@ -174,6 +182,7 @@ classDiagram
 
     Sessions --> SerialProcess : creates & manages
     ProfileStore --> PortProfile : saves
+    ProfileStore --> Defaults : saves
     PortProfile --> SerialConfig : has
     PortDialog --> ProfileStore : saves, deletes
     SidebarWidget --> ProfileStore : lists, deletes
@@ -201,12 +210,17 @@ A configuration ([`src/profiles.h`](../src/profiles.h), `PortProfile`) is a
 name, a `SerialConfig` (port, baud rate, data bits, stop bits, parity, flow
 control, timestamps) and a log directory. The size at which a log file is
 rotated is not part of it: it is Configure's, for every capture
-(`sessionConfig()` adds it at Start).
+(`sessionConfig()` adds it at Start, from `ProfileStore::defaults()`).
 
-`ProfileStore` is the one owner of the configurations: they are saved in
-`serial.ini` in the directory the host's `get_config_dir` gives, as the array
-`profiles`, in the order they were first saved, next to the defaults Configure
-saves (group `serial`). Settings are saved as text (`8`, `1.5`, `even`,
+`ProfileStore` is the one owner of `serial.ini`, in the configuration
+directory it is given (the host's `get_config_dir`); no other code knows the
+file or its keys. It keeps the defaults Configure saves (group `serial`:
+`defaults()`, `saveDefaults()`, which says why when it cannot save), the
+configurations, as the array `profiles`, in the order they were first saved,
+and the log directory saved last; `defaultLogDir()` is `logs` in the
+configuration directory. The Configure dialog is UI over it, and a capture
+gets its size limit from it at Start: the serial capture does not know the
+file exists. Settings are saved as text (`8`, `1.5`, `even`,
 `rtscts`), and one that is not a setting loads as its default. `upsert()`,
 `rename()` and `remove()` return why they failed in words for the user, empty
 when they did, and emit `changed()` when they did; `remove()` and `rename()`
@@ -432,7 +446,7 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[counters]` | A session's counters, against a pseudo-terminal, and a running tile showing them |
 | `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
-| `[profiles]` | The saved configurations and their store, against a FakeHost's `serial.ini` |
+| `[profiles]` | `serial.ini` and its store: the defaults, the saved configurations, the log directory, a file of 0.6.0, against a temporary directory without a host |
 | `[tile]` | The tile on its own: states, buttons, controls, colours |
 | `[portdialog]` | The dialog: save, edit, delete, what it refuses |
 | `[sidebarwidget]` | The sidebar tab: tiles created, updated, deleted; Start and Stop against pseudo-terminals, two at once, a busy port; a running tile's counters, Rotate and Send |

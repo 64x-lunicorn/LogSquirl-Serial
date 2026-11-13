@@ -364,7 +364,8 @@ void SidebarWidget::start( const QString& name )
     }
     // Refused with a notification when the port is captured already, or
     // does not open; sessionStarted() updates the tile when it starts.
-    sessions_->startSession( sessionConfig( *profile ), savePathFor( *profile ), name );
+    sessions_->startSession( sessionConfig( *profile, profiles_->defaults() ),
+                             savePathFor( *profile, profiles_->defaultLogDir() ), name );
 }
 
 void SidebarWidget::stop( const QString& name )

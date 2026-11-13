@@ -138,7 +138,7 @@ PortDialog::PortDialog( ProfileStore* profiles, Sessions* sessions, QWidget* par
         QStringLiteral( "Add a [YYYY-MM-DD HH:mm:ss.zzz] prefix to each received line" ) );
 
     logDirEdit_->setObjectName( "logDir" );
-    const auto defaultDir = defaultLogDir();
+    const auto defaultDir = profiles_->defaultLogDir();
     const auto whenEmpty = defaultDir.isEmpty()
                                ? QStringLiteral( "temporary files, removed when LogSquirl quits" )
                                : QDir::toNativeSeparators( defaultDir );
