@@ -77,9 +77,9 @@
  *
  * OWNERSHIP
  * ─────────
- * Created by logsquirl_plugin_init() and registered with
- * register_sidebar_tab.  logsquirl_plugin_shutdown() unregisters and
- * deletes it, before the store and the sessions it shows.
+ * Owned by the plugin instance (plugin.cpp) and registered with
+ * register_sidebar_tab; destroying the instance unregisters and deletes it,
+ * before the store and the sessions it shows.
  */
 
 #pragma once

@@ -56,8 +56,8 @@
  *
  * OWNERSHIP
  * ─────────
- * Created by logsquirl_plugin_init(), deleted by logsquirl_plugin_shutdown(),
- * before the store and the sessions it uses.
+ * A member of the plugin instance (plugin.cpp), destroyed before the store
+ * and the sessions it uses.
  */
 
 #pragma once

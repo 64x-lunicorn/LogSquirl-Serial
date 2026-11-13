@@ -222,8 +222,8 @@ private:
     CApiHost host_;           ///< What every part tells LogSquirl through.
     std::size_t hostApiSize_; ///< The size of the host's table (init_ex()).
     TemporaryFiles temporaryFiles_;
-    ProfileStore profiles_;              ///< serial.ini: defaults, configurations.
     Sessions sessions_;                  ///< The running captures, which the views show.
+    ProfileStore profiles_;              ///< serial.ini; asks sessions_ what captures.
     PortDialog dialog_;                  ///< Edits a saved configuration.
     OwnedWidget<SidebarWidget> sidebar_; ///< One tile per configuration.
     SidebarTab sidebarTab_;              ///< sidebar_, as the host's tab.
@@ -257,10 +257,9 @@ Plugin::Plugin( const LogSquirlHostApi* api, void* handle, std::size_t apiSize,
     : host_( api, handle, tempRoot )
     , hostApiSize_( apiSize )
     , temporaryFiles_( host_ )
-    , profiles_( host_.configDir(),
-                 [ this ]( const QString& name ) { return sessions_.isRunning( name ); } )
     // Scans the ports, once, for every view.
     , sessions_( host_ )
+    , profiles_( host_.configDir(), sessions_.runningCheck() )
     // Parentless, so that it never goes with a main window that is
     // destroyed first; showDialog() keeps it on top of one.
     , dialog_( &profiles_, &sessions_ )

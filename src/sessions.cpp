@@ -184,8 +184,11 @@ QString Sessions::launch( const SerialConfig& config, const QString& savePath,
                       .arg( name, holder ) );
     }
 
-    // Two sessions appending to one file would interleave their lines.
-    if ( !savePath.isEmpty() && isFileInUse( savePath ) ) {
+    // Two sessions appending to one file would interleave their lines.  The
+    // path as the file is opened (~ expanded), so that ~/x.log and its full
+    // path are one file; one that is not a full path is refused on open.
+    const auto openedPath = CaptureLog::absoluteUserPath( savePath );
+    if ( !savePath.isEmpty() && isFileInUse( openedPath.isEmpty() ? savePath : openedPath ) ) {
         return refuse( QString( "Serial capture not started for %1: another session is "
                                 "already writing to %2." )
                            .arg( name, savePath ) );

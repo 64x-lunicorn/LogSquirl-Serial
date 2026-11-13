@@ -88,9 +88,17 @@ SerialProcess::SerialProcess( Host& host, const SerialConfig& config, const QStr
     , log_( config.timestamps )
 {
     device_->setParent( this );
-    connect( device_, &QIODevice::readyRead, this, &SerialProcess::onReadyRead );
+    // What the event loop runs goes through guarded(): an exception must not
+    // reach the host's event loop.
+    connect( device_, &QIODevice::readyRead, this, [ this ]() {
+        guarded( host_, "reading a serial port", [ this ] { onReadyRead(); } );
+    } );
     if ( port_ ) {
-        connect( port_, &QSerialPort::errorOccurred, this, &SerialProcess::onPortError );
+        connect( port_, &QSerialPort::errorOccurred, this,
+                 [ this ]( QSerialPort::SerialPortError error ) {
+                     guarded( host_, "handling a serial port error",
+                              [ this, error ] { onPortError( error ); } );
+                 } );
     }
 
     // From the event loop, not from within the slot that is reading the
@@ -99,9 +107,11 @@ SerialProcess::SerialProcess( Host& host, const SerialConfig& config, const QStr
         QMetaObject::invokeMethod(
             this,
             [ this ]() {
-                if ( log_.hasReachedSizeLimit() && isRunning() ) {
-                    Q_EMIT sizeLimitReached();
-                }
+                guarded( host_, "reaching a serial capture's size limit", [ this ] {
+                    if ( log_.hasReachedSizeLimit() && isRunning() ) {
+                        Q_EMIT sizeLimitReached();
+                    }
+                } );
             },
             Qt::QueuedConnection );
     } );
@@ -296,7 +306,7 @@ void SerialProcess::failWrite()
     }
     Q_EMIT errorOccurred( log_.writeError() + "; capture stopped." );
     // From the event loop, not from within the slot that is reading the port.
-    QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
+    queueStop();
 }
 
 void SerialProcess::failPort( const QString& message )
@@ -310,7 +320,15 @@ void SerialProcess::failPort( const QString& message )
     // as well would report the error twice.
     portFailed_ = true;
     Q_EMIT errorOccurred( message );
-    QMetaObject::invokeMethod( this, &SerialProcess::stop, Qt::QueuedConnection );
+    queueStop();
+}
+
+void SerialProcess::queueStop()
+{
+    QMetaObject::invokeMethod(
+        this,
+        [ this ]() { guarded( host_, "stopping a failed serial capture", [ this ] { stop(); } ); },
+        Qt::QueuedConnection );
 }
 
 void SerialProcess::onReadyRead()

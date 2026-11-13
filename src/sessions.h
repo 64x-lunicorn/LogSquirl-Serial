@@ -48,8 +48,8 @@
  *
  * OWNERSHIP
  * ─────────
- * Created by logsquirl_plugin_init(), deleted by logsquirl_plugin_shutdown()
- * after stopAll() and after the views.  The running SerialProcesses are its
+ * A member of the plugin instance (plugin.cpp): destroyed after stopAll() and
+ * after the store and the views that use it.  The running SerialProcesses are its
  * children: deleting it with sessions still running stops them without a
  * signal, and removes the temporary files of those not preserved.
  */

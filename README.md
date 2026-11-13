@@ -355,12 +355,14 @@ logsquirl-serial/
 ├── include/
 │   └── logsquirl_plugin_api.h  # Vendored SDK header (MIT license)
 ├── src/
-│   ├── plugin.h                # Global state shared across translation units
-│   ├── plugin.cpp              # C ABI entry points (get_info, init, shutdown)
+│   ├── plugin.h                # The running plugin's host, guarded() for the entry points
+│   ├── plugin.cpp              # C ABI entry points; the plugin instance that owns every part
 │   ├── host.h                  # Host: what the captures need of LogSquirl; its C ABI adapter
 │   ├── host.cpp
 │   ├── serialprocess.h         # Serial port discovery + per-port session wrapper
 │   ├── serialprocess.cpp
+│   ├── capturelog.h            # The log file and its lines: framing, [TX], rotation, size limit
+│   ├── capturelog.cpp
 │   ├── sessions.h              # Session management (start/stop/rotate), port list
 │   ├── sessions.cpp
 │   ├── profiles.h              # Saved port configurations and their store (serial.ini)

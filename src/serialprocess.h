@@ -374,6 +374,9 @@ private:
     /// session, from the event loop.
     void failPort( const QString& message );
 
+    /// Stop the session from the event loop, through guarded().
+    void queueStop();
+
     /// After log_ wrote (@p ok: it could): fail the session if it could not.
     void logged( bool ok );
 

@@ -542,6 +542,22 @@ SCENARIO( "two sessions never write to the same file", "[sessions]" )
             }
         }
 
+        WHEN( "starting a second port with the same save path, written from ~" )
+        {
+            const auto home = qgetenv( "HOME" );
+            qputenv( "HOME", logDir.path().toUtf8() );
+            const auto started
+                = sessions.startSession( configFor( secondDevice.devicePath() ), "~/capture.log" );
+            qputenv( "HOME", home );
+
+            THEN( "it is refused as well: ~ is expanded before the paths are compared" )
+            {
+                REQUIRE_FALSE( started );
+                REQUIRE_FALSE( sessions.isSessionActive( secondDevice.devicePath() ) );
+                REQUIRE( host.notifications.size() == 1 );
+            }
+        }
+
         sessions.stopAll();
     }
 

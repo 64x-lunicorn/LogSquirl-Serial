@@ -238,8 +238,9 @@ classDiagram
 The C entry points reach the parts through one global, a pointer to the
 `Plugin` that `init()` creates and `shutdown()` deletes
 ([`src/plugin.cpp`](../src/plugin.cpp)). Its members are declared in the order
-they depend on each other — the host, the temporary files, the settings, the
-captures, the dialog, the sidebar, its tab registration — so destroying it
+they depend on each other — the host, the temporary files, the captures, the
+settings (which ask the captures what runs), the dialog, the sidebar, its tab
+registration — so destroying it
 unregisters the tab while its widget lives, and destroys each part before those
 it uses; its destructor first stops the captures, while every part that shows
 them is there. When LogSquirl quits (`aboutToQuit`), the temporary files go
@@ -252,7 +253,7 @@ The sidebar and the dialog hold no session state of their own: they call
 `Sessions` and refresh on its signals, and both stay in step when a session
 ends on its own (device unplugged, log file not writable). A running session's
 counters change on every line, so no signal announces them: the sidebar reads
-them from `Sessions::session(port)` on a timer of its own, which runs only
+them from `Sessions::captureOf(name)` on a timer of its own, which runs only
 while some session runs.
 
 ## Key Implementation Details
@@ -564,6 +565,8 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[serialprocess]` | SerialProcess construction and defaults; what it tells of a device, log file or rotation that fails and of the size limit, against a substitute device; a few end-to-end scenarios over a pseudo-terminal |
 | `[counters]` | `CaptureLog`'s counters, a session's, and a running tile showing them |
 | `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
+| `[start]` | `Sessions::start()` from a saved configuration: each refusal in words, the serial settings and log path it derives, two configurations never writing to one file |
+| `[byname]` | Stop, Rotate, Send and the live details by configuration name, and a quiet no-op for a configuration that does not capture |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
 | `[hostapi]` | `CApiHost`, the `Host` of the C ABI, `warn()` and `guarded()` |
 | `[host]` | What `Sessions` logs and notifies on the `Host` it is handed, once each |
