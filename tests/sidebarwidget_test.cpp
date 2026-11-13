@@ -31,6 +31,7 @@
 #include "connectiontile.h"
 #include "fakehost.h"
 #include "modal.h"
+#include "porterror.h"
 #include "profiles.h"
 #include "pseudoterminal.h"
 #include "sessions.h"
@@ -652,11 +653,8 @@ SCENARIO( "a tile follows a capture that ends on its own", "[sidebarwidget][sign
         WHEN( "its device is unplugged" )
         {
             // A pseudo-terminal cannot be unplugged: the port reports it.
-            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
-            REQUIRE( session );
-            QMetaObject::invokeMethod(
-                session, "onPortError",
-                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+            serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                          QSerialPort::ResourceError );
 
             THEN( "the tile shows it stopped" )
             {

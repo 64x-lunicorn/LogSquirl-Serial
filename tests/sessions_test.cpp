@@ -31,6 +31,7 @@
 
 #include "fakehost.h"
 #include "filesizelimit.h"
+#include "porterror.h"
 #include "pseudoterminal.h"
 #include "readonlydir.h"
 #include "sessions.h"
@@ -376,8 +377,8 @@ SCENARIO( "stopAll keeps temporary log files for their tabs", "[sessions]" )
 #ifdef Q_OS_UNIX
 // A pseudo-terminal cannot be unplugged: QSerialPort does not notice when
 // its other side closes.  A real USB adapter that is pulled makes the port
-// report QSerialPort::ResourceError, so the test delivers that error to
-// the session's handler directly.
+// report QSerialPort::ResourceError, so the test has the session's port
+// report it (porterror.h).
 SCENARIO( "an unplugged device ends its session", "[sessions]" )
 {
     GIVEN( "a running session" )
@@ -393,9 +394,7 @@ SCENARIO( "an unplugged device ends its session", "[sessions]" )
         WHEN( "the port reports that the device is gone, twice" )
         {
             for ( int i = 0; i < 2; ++i ) {
-                QMetaObject::invokeMethod(
-                    session, "onPortError",
-                    Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+                serial_test::reportPortError( session, QSerialPort::ResourceError );
             }
 
             THEN( "the session is removed" )
@@ -433,8 +432,7 @@ SCENARIO( "any error of an open port ends its session, with one notification", "
         REQUIRE( session );
         host.notifications.clear();
         const auto reportError = [ session ]( QSerialPort::SerialPortError error ) {
-            QMetaObject::invokeMethod( session, "onPortError",
-                                       Q_ARG( QSerialPort::SerialPortError, error ) );
+            serial_test::reportPortError( session, error );
         };
 
         WHEN( "the port reports a ReadError, again and again, then an UnknownError" )
@@ -663,11 +661,8 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
             AND_WHEN( "its device is unplugged" )
             {
                 recorded.events.clear();
-                auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
-                REQUIRE( session );
-                QMetaObject::invokeMethod(
-                    session, "onPortError",
-                    Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+                serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                              QSerialPort::ResourceError );
 
                 THEN( "its end is announced, once" )
                 {
@@ -822,11 +817,8 @@ SCENARIO( "a session remembers the configuration that started it", "[sessions][b
         {
             // As in "an unplugged device ends its session": a pseudo-terminal
             // cannot be unplugged, so the port reports the error itself.
-            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
-            REQUIRE( session );
-            QMetaObject::invokeMethod(
-                session, "onPortError",
-                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+            serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                          QSerialPort::ResourceError );
 
             THEN( "it is not remembered any more" )
             {
@@ -949,11 +941,8 @@ SCENARIO( "a configuration that does not capture is stopped, rotated and sent to
             sessions.stop( "board" );
         }
         else {
-            auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
-            REQUIRE( session );
-            QMetaObject::invokeMethod(
-                session, "onPortError",
-                Q_ARG( QSerialPort::SerialPortError, QSerialPort::ResourceError ) );
+            serial_test::reportPortError( sessions.findChild<serial_monitor::SerialProcess*>(),
+                                          QSerialPort::ResourceError );
             REQUIRE( waitFor( [ &sessions ]() { return !sessions.isRunning( "board" ); } ) );
         }
 

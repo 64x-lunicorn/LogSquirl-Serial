@@ -89,13 +89,12 @@ classDiagram
 
     class SerialProcess {
         -SerialConfig config_
-        -QSerialPort port_
-        -QTemporaryDir tempDir_
-        -QFile tempFile_
+        -QIODevice* device_
         -CaptureLog log_
         +start()
         +stop()
         +sendData(data, lineEnding) bool
+        +rotateLog(partialLine) QString
         +preserveTempFile()
         +isRunning() bool
         +portName() QString
@@ -112,18 +111,32 @@ classDiagram
     }
 
     class CaptureLog {
+        -QTemporaryDir tempDir_
+        -QFile file_
         +CaptureLog(timestamps, clock, maxLineLength)
-        +start(file)
-        +startFile(file)
+        +open(port, savePath, tempRoot, error) bool
+        +discard()
+        +close() bool
+        +rotate(partialLine, error) QString
+        +isOpen() bool
+        +path() QString
+        +keepTempDir() QString
+        +setSizeLimit(bytes, reached)
+        +hasReachedSizeLimit() bool
+        +nextRotationSize() qint64
+        +start(device)
         +receive(data) bool
         +send(command) bool
         +endPartialLine() bool
-        +hasPartialLine() bool
         +hasFailed() bool
+        +writeError() QString
         +lineCount() qint64
         +totalLineCount() qint64
         +receivedBytes() qint64
         +fileSize() qint64
+        +rotationCount() int
+        +generateLogPath()$ QString
+        +absoluteUserPath()$ QString
     }
 
     class Sessions {
@@ -213,7 +226,7 @@ classDiagram
     SidebarWidget --> ConnectionTile : one per profile
     SidebarWidget --> Sessions : starts, stops, view of
     SerialProcess --> SerialConfig : uses
-    SerialProcess --> CaptureLog : feeds bytes and commands
+    SerialProcess --> CaptureLog : opens, rotates, feeds bytes and commands
     Plugin --> Sessions : owns
     Plugin --> ProfileStore : owns
     Plugin --> PortDialog : owns
@@ -375,18 +388,22 @@ to enumerate ports.  The `filterPorts()` method excludes:
 
 When a session starts:
 
-1. A `QTemporaryDir` is created for this session, named after the process:
-   `logsquirl-serial-<pid>-XXXXXX` (`src/tempdirs.h`)
-2. One log file is opened for the capture, never two: the configured save
-   path (appended to, so Stop and Start keep the earlier capture), or, when
-   there is none, a new temp file `serial_<portName>.log` inside that
-   directory
-3. `QSerialPort` is configured and opened in `ReadWrite` mode (Send needs
-   to write)
-4. The `readyRead` signal triggers `onReadyRead()`, which hands what it read
-   to the session's `CaptureLog` ([`src/capturelog.h`](../src/capturelog.h)).
-   The serial capture is an adapter: it reads the port and sends to it, and
-   `CaptureLog` decides what is written:
+1. Its `CaptureLog` ([`src/capturelog.h`](../src/capturelog.h)) opens one
+   log file for the capture, never two (`CaptureLog::open()`): the
+   configured save path (appended to, so Stop and Start keep the earlier
+   capture; refused if it is not a full path), or, when there is none, a
+   new temp file `serial_<portName>.log` in a `QTemporaryDir` of its own,
+   named after the process: `logsquirl-serial-<pid>-XXXXXX`
+   (`src/tempdirs.h`). Only a regular file is opened: a FIFO, a symlink or
+   a device is refused, without blocking. A file it creates is readable by
+   the user only.
+2. `QSerialPort` is configured and opened in `ReadWrite` mode (Send needs
+   to write); if it cannot be, the log file is discarded again (removed if
+   the start created it)
+3. The `readyRead` signal triggers `onReadyRead()`, which hands what it read
+   to the `CaptureLog`. The serial capture is an adapter: it reads the port
+   and sends to it, says what failed, and stops; it holds no file or
+   rotation state of its own. `CaptureLog` decides what is written:
    - `\n`, `\r\n` and a lone `\r` end a line, a CRLF split across two reads
      included; a lone CR ends its line at once
    - A line that never ends is forced out at 64 KiB, before a UTF-8
@@ -396,9 +413,34 @@ When a session starts:
    - A command sent (`sendData(data, lineEnding)`, the line ending per call)
      is written as a `[TX] ` line, after the part of a line received so far,
      so that the rest of it is not joined to the command
-   - It counts the lines and bytes the session's counters show
+   - It counts the lines, bytes and rotations the session's counters show
    - Each line is written to that one log file, flushed after each read for
      real-time tailing
+
+A port error (and, for the substitute device the tests hand a
+`SerialProcess` in place of its `QSerialPort`, a read that fails), a log
+file that cannot be written, and a rotation that leaves no file each end the
+session from the event loop, told once.
+
+### Rotation and the size limit
+
+`CaptureLog::rotate()` (↻ Rotate, or `SerialProcess::rotateLog()`) closes
+the current file, which stays on disk for its tab, and opens a new one that
+must not exist yet: next to a save path, a new `generateLogPath()` name
+(`<yyyy-MM-dd_HHmmss>_<port>.log`, numbered within a second); in the
+temporary directory, `serial_<port>_<n>.log`. The part of a line received so
+far is written out first, or kept for the new file (`PartialLine::Keep`, at
+the size limit). If the new file cannot be created, the capture goes on in
+the old one, reopened, and the session says so; if that cannot be reopened
+either, the capture has ended (`isOpen()` false) and the session stops.
+
+With a size limit (`SerialConfig::maxFileBytes`, `setSizeLimit()`), the
+`CaptureLog` asks for a rotation after the line that makes the file reach
+it. The session emits `sizeLimitReached()` from the event loop, unless the
+file was rotated or the session stopped meanwhile, and `Sessions` rotates
+keeping the partial line. A rotation that fails leaves the next request due
+once the file has grown by the limit past the end of that line, not on
+every line.
 
 ### Timestamp Format
 
@@ -417,7 +459,8 @@ fix the time.
 
 When the user clicks Stop:
 
-1. `preserveTempFile()` sets `tempDir_.setAutoRemove(false)`
+1. `preserveTempFile()` keeps the temporary directory
+   (`CaptureLog::keepTempDir()`)
 2. `stop()` closes the serial port and flushes remaining data
 3. The `SerialProcess` is deleted, but the temp file remains on disk
 4. The LogSquirl tab continues to display all captured data
@@ -503,9 +546,12 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[plugininfo]` | Verify C ABI metadata struct |
 | `[filterports]` | Port list filtering logic |
 | `[discoverports]` | Port discovery integration |
-| `[capturelog]` | What is written from the bytes received and the commands sent: framing, UTF-8, escapes, timestamps, `[TX]` lines, counters, a file that refuses writes; in-process, without a port |
-| `[serialprocess]` | SerialProcess construction and defaults; a few end-to-end scenarios over a pseudo-terminal |
-| `[counters]` | `CaptureLog`'s counters, a session's against a pseudo-terminal, and a running tile showing them |
+| `[capturelog]` | The log file and what is written to it from the bytes received and the commands sent: framing, UTF-8, escapes, timestamps, `[TX]` lines, counters, a device that refuses writes; in-process, without a port |
+| `[files]` | `CaptureLog`'s log file: the save path or the temporary directory, regular files only, keeping the directory, discarding the file of a start that failed |
+| `[rotation]` | `CaptureLog::rotate()`: file naming, the partial line, the fallback to the old file and the end of the capture, against read-only directories |
+| `[sizelimit]` | `CaptureLog`'s size limit: asked for after the line that reaches it, re-armed past that line, again after a failed rotation |
+| `[serialprocess]` | SerialProcess construction and defaults; what it tells of a device, log file or rotation that fails and of the size limit, against a substitute device; a few end-to-end scenarios over a pseudo-terminal |
+| `[counters]` | `CaptureLog`'s counters, a session's, and a running tile showing them |
 | `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
 | `[hostapi]` | `CApiHost`, the `Host` of the C ABI, `warn()` and `guarded()` |

@@ -22,12 +22,18 @@
  * @brief BDD tests for SerialProcess instance behaviour.
  *
  * Tests basic construction, property accessors and the default
- * configuration without requiring real serial hardware.  The
- * scenarios that need an open port use a pseudo-terminal as the device
- * (see pseudoterminal.h) and only run on Unix.  What is written from the
- * bytes received (framing, escapes, timestamps, [TX] lines, counters) is
- * CaptureLog's, tested in capturelog_test.cpp; the few scenarios here that
- * cover it check that the session hands its port's bytes to it.
+ * configuration without requiring real serial hardware.  What the session
+ * does when its device, its log file or a rotation fails, and when the
+ * file reaches its size limit, is tested with a substitute device in place
+ * of the serial port (SubstitutePort), in-process on every platform.  A
+ * few end-to-end scenarios use a pseudo-terminal as the device (see
+ * pseudoterminal.h) and only run on Unix.
+ *
+ * The log file itself (which file, regular files only, rotation, the size
+ * limit) and what is written to it (framing, escapes, timestamps, [TX]
+ * lines, counters) are CaptureLog's, tested in capturelog_test.cpp; the
+ * scenarios here check that the session hands its device's bytes to it,
+ * and tells what it reports.
  */
 
 #include <catch2/catch.hpp>
@@ -40,15 +46,12 @@
 #include "serialprocess.h"
 
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
 
-#ifdef Q_OS_UNIX
-#include <sys/stat.h>
-#include <sys/types.h>
-#endif
+#include <cstring>
+#include <memory>
 
 using serial_monitor::SerialConfig;
 using serial_monitor::SerialProcess;
@@ -62,13 +65,11 @@ namespace {
 /// A port name that exists on no system.
 const QString kMissingPort = "logsquirl-test-no-such-port";
 
-#ifdef Q_OS_UNIX
 QByteArray readFile( const QString& path )
 {
     QFile file( path );
     return file.open( QIODevice::ReadOnly ) ? file.readAll() : QByteArray();
 }
-#endif
 
 SerialConfig configFor( const QString& portName )
 {
@@ -77,6 +78,99 @@ SerialConfig configFor( const QString& portName )
     cfg.timestamps = false; // keep the file content predictable
     return cfg;
 }
+
+/**
+ * A device that stands in for a serial port, played by the test: it
+ * delivers what the test sends as the device, keeps what the session sends
+ * to it, and fails a read or a write when the test says so.
+ */
+class SubstitutePort : public QIODevice {
+public:
+    /// Send @p data as the device.
+    void deliver( const QByteArray& data )
+    {
+        pending_ += data;
+        Q_EMIT readyRead();
+    }
+
+    /// Fail every read from here on, for @p reason, as a device that is gone.
+    void failReads( const QString& reason )
+    {
+        failReads_ = true;
+        setErrorString( reason );
+        Q_EMIT readyRead();
+    }
+
+    /// Fail every write from here on, for @p reason.
+    void failWrites( const QString& reason )
+    {
+        failWrites_ = true;
+        setErrorString( reason );
+    }
+
+    /// What the session sent to the device.
+    QByteArray sent;
+
+    bool isSequential() const override
+    {
+        return true;
+    }
+
+    qint64 bytesAvailable() const override
+    {
+        return pending_.size() + QIODevice::bytesAvailable();
+    }
+
+protected:
+    qint64 readData( char* data, qint64 maxSize ) override
+    {
+        if ( failReads_ ) {
+            return -1;
+        }
+        const auto size = qMin( maxSize, static_cast<qint64>( pending_.size() ) );
+        std::memcpy( data, pending_.constData(), static_cast<size_t>( size ) );
+        pending_.remove( 0, size );
+        return size;
+    }
+
+    qint64 writeData( const char* data, qint64 size ) override
+    {
+        if ( failWrites_ ) {
+            return -1;
+        }
+        sent.append( data, size );
+        return size;
+    }
+
+private:
+    QByteArray pending_;
+    bool failReads_ = false;
+    bool failWrites_ = false;
+};
+
+/// A session on a SubstitutePort, recording what it reports.
+struct SubstituteSession {
+    explicit SubstituteSession( const QString& savePath = {}, qint64 maxFileBytes = 0 )
+    {
+        auto cfg = configFor( "substitute" );
+        cfg.maxFileBytes = maxFileBytes;
+        auto device = std::make_unique<SubstitutePort>();
+        port = device.get();
+        proc = std::make_unique<SerialProcess>( host, cfg, savePath, std::move( device ) );
+        QObject::connect( proc.get(), &SerialProcess::errorOccurred,
+                          [ this ]( const QString& message ) { errors << message; } );
+        QObject::connect( proc.get(), &SerialProcess::finished, [ this ]() { ++finishedCount; } );
+        QObject::connect( proc.get(), &SerialProcess::sizeLimitReached,
+                          [ this ]() { ++sizeLimitRequests; } );
+    }
+
+    FakeHost host;
+    SubstitutePort* port = nullptr; ///< Owned by proc.
+    std::unique_ptr<SerialProcess> proc;
+    QStringList errors;
+    int finishedCount = 0;
+    int sizeLimitRequests = 0;
+};
 
 } // namespace
 
@@ -444,16 +538,12 @@ SCENARIO( "a session that has not started has counted nothing", "[serialprocess]
     }
 }
 
-#ifdef Q_OS_UNIX
-SCENARIO( "a session's counters follow what it captured", "[serialprocess][counters]" )
+SCENARIO( "a session's counters are its capture's", "[serialprocess][counters]" )
 {
     GIVEN( "a running session whose log file is rotated at 1000 bytes" )
     {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 1000;
-        SerialProcess proc( host, cfg );
+        SubstituteSession session( {}, 1000 );
+        auto& proc = *session.proc;
         const auto beforeStart = QDateTime::currentDateTime();
         REQUIRE( proc.start() );
         const auto afterStart = QDateTime::currentDateTime();
@@ -468,117 +558,238 @@ SCENARIO( "a session's counters follow what it captured", "[serialprocess][count
 
         WHEN( "the device sends two lines and part of a third" )
         {
-            REQUIRE( device.send( "first\r\nsecond\nthi" ) );
-            REQUIRE( waitFor( [ &proc ]() { return proc.receivedBytes() == 17; } ) );
+            session.port->deliver( "first\r\nsecond\nthi" );
 
             THEN( "the bytes received, the lines written and the file's size are counted" )
             {
                 REQUIRE( proc.receivedBytes() == 17 );
                 REQUIRE( proc.totalLineCount() == 2 );
+                REQUIRE( proc.lineCount() == 2 );
                 REQUIRE( proc.fileSize() == 13 ); // "first\nsecond\n"
             }
 
             AND_WHEN( "the log is rotated, and the device ends its line" )
             {
                 REQUIRE_FALSE( proc.rotateLog( SerialProcess::PartialLine::Keep ).isEmpty() );
-                REQUIRE( device.send( "rd\n" ) );
-                REQUIRE( waitFor( [ &proc ]() { return proc.totalLineCount() == 3; } ) );
+                session.port->deliver( "rd\n" );
 
-                THEN( "the rotation is counted, and the new file's size starts again" )
+                THEN( "the rotation is counted, and the new file's counters start again" )
                 {
                     REQUIRE( proc.rotationCount() == 1 );
+                    REQUIRE( proc.lineCount() == 1 );
                     REQUIRE( proc.fileSize() == 6 ); // "third\n"
                     REQUIRE( proc.nextRotationSize() == 1000 );
+                    REQUIRE( readFile( proc.tempFilePath() ) == "third\n" );
                 }
 
                 THEN( "the lines and bytes of the whole session go on" )
                 {
                     REQUIRE( proc.receivedBytes() == 20 );
                     REQUIRE( proc.totalLineCount() == 3 );
-                    REQUIRE( proc.lineCount() == 1 );
                 }
-            }
-        }
-    }
 
-    GIVEN( "a save path that already holds a capture" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto savePath = logDir.filePath( "capture.log" );
-        {
-            QFile earlier( savePath );
-            REQUIRE( earlier.open( QIODevice::WriteOnly ) );
-            earlier.write( "earlier\n" );
-        }
-        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
-        REQUIRE( proc.start() );
-
-        WHEN( "the capture appends a line" )
-        {
-            REQUIRE( device.send( "new\n" ) );
-            REQUIRE( waitFor( [ &proc ]() { return proc.totalLineCount() == 1; } ) );
-
-            THEN( "the file's size counts what it held, the bytes received do not" )
-            {
-                REQUIRE( proc.fileSize() == 12 );
-                REQUIRE( proc.receivedBytes() == 4 );
+                THEN( "the host's log says so" )
+                {
+                    REQUIRE( session.host.logs.filter( "Rotated serial log for substitute" ).size()
+                             == 1 );
+                }
             }
         }
     }
 
     GIVEN( "a running session without a size limit" )
     {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 0;
-        SerialProcess proc( host, cfg );
-        REQUIRE( proc.start() );
+        SubstituteSession session( {}, 0 );
+        REQUIRE( session.proc->start() );
 
         THEN( "no rotation is due" )
         {
-            REQUIRE( proc.nextRotationSize() == 0 );
+            REQUIRE( session.proc->nextRotationSize() == 0 );
         }
     }
 }
-#endif
+
+SCENARIO( "a device that fails ends its session", "[serialprocess]" )
+{
+    GIVEN( "a running session on a device, which has sent a line" )
+    {
+        SubstituteSession session;
+        auto& proc = *session.proc;
+        REQUIRE( proc.start() );
+        session.port->deliver( "first\n" );
+
+        WHEN( "the device cannot be read any more, as when it is gone" )
+        {
+            session.port->failReads( "Input/output error" );
+            session.port->failReads( "Input/output error" );
+
+            THEN( "the session stops, from the event loop" )
+            {
+                REQUIRE( proc.isRunning() );
+                REQUIRE( waitFor( [ &proc ]() { return !proc.isRunning(); } ) );
+                REQUIRE( session.finishedCount == 1 );
+            }
+
+            THEN( "it says why, once" )
+            {
+                serial_test::processEventsFor( 50 );
+                REQUIRE( session.errors
+                         == QStringList{ "Serial port error on substitute: Input/output error; "
+                                         "capture stopped." } );
+            }
+
+            THEN( "what was captured before is kept" )
+            {
+                REQUIRE( waitFor( [ &proc ]() { return !proc.isRunning(); } ) );
+                REQUIRE( readFile( proc.tempFilePath() ) == "first\n" );
+            }
+        }
+
+        WHEN( "the device refuses a command sent to it" )
+        {
+            session.port->failWrites( "Resource busy" );
+            const auto sent = proc.sendData( "reboot", TxLineEnding::LF );
+
+            THEN( "the command is not sent, nor logged, and it says why" )
+            {
+                REQUIRE_FALSE( sent );
+                REQUIRE( session.errors
+                         == QStringList{ "Failed to write to substitute: Resource busy" } );
+                REQUIRE( readFile( proc.tempFilePath() ) == "first\n" );
+            }
+        }
+
+        WHEN( "a command is sent" )
+        {
+            REQUIRE( proc.sendData( "reboot", TxLineEnding::CRLF ) );
+
+            THEN( "it goes to the device with its line ending, and to the log without" )
+            {
+                REQUIRE( session.port->sent == "reboot\r\n" );
+                REQUIRE( readFile( proc.tempFilePath() ) == "first\n[TX] reboot\n" );
+            }
+        }
+    }
+}
+
+SCENARIO( "a rotation that fails is told, and ends the session only without a file",
+          "[serialprocess]" )
+{
+    if ( !ReadOnlyDir::isEnforced() ) {
+        WARN( "File permissions are not enforced (running as root?); skipped." );
+        return;
+    }
+
+    GIVEN( "a running session whose log directory no longer accepts new files" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        SubstituteSession session( savePath );
+        auto& proc = *session.proc;
+        REQUIRE( proc.start() );
+        session.port->deliver( "first\n" );
+
+        WHEN( "rotating fails" )
+        {
+            QString newPath;
+            {
+                const ReadOnlyDir readOnly( logDir.path() );
+                newPath = proc.rotateLog();
+            }
+            session.port->deliver( "after\n" );
+
+            THEN( "the failure is reported once and the session keeps running in the old file" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( session.errors.size() == 1 );
+                REQUIRE( session.errors.first().contains( "still writing to " + savePath ) );
+                REQUIRE( proc.isRunning() );
+                REQUIRE( proc.tempFilePath() == savePath );
+                REQUIRE( readFile( savePath ) == "first\nafter\n" );
+            }
+        }
+
+        WHEN( "rotating fails and the old file cannot be reopened either" )
+        {
+            QString newPath;
+            {
+                QFile::setPermissions( savePath, QFileDevice::ReadOwner );
+                const ReadOnlyDir readOnly( logDir.path() );
+                newPath = proc.rotateLog();
+            }
+
+            THEN( "the session stops instead of running without a file" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( session.errors.size() == 1 );
+                REQUIRE( session.errors.first().contains( "capture stopped" ) );
+                REQUIRE_FALSE( proc.isRunning() );
+                REQUIRE( session.finishedCount == 1 );
+            }
+        }
+    }
+}
+
+SCENARIO( "a log file that reaches its size limit asks to be rotated, from the event loop",
+          "[serialprocess]" )
+{
+    GIVEN( "a running session whose log file may hold 16 bytes" )
+    {
+        SubstituteSession session( {}, 16 );
+        auto& proc = *session.proc;
+        REQUIRE( proc.start() );
+
+        WHEN( "the file stays below it" )
+        {
+            session.port->deliver( "0123456789\n" );
+            serial_test::processEventsFor( 50 );
+
+            THEN( "no rotation is asked for" )
+            {
+                REQUIRE( session.sizeLimitRequests == 0 );
+            }
+        }
+
+        WHEN( "the file reaches it" )
+        {
+            session.port->deliver( "0123456789\nabcdefghij\n" );
+
+            THEN( "a rotation is asked for, once the read has been handled" )
+            {
+                REQUIRE( session.sizeLimitRequests == 0 );
+                REQUIRE( waitFor( [ &session ]() { return session.sizeLimitRequests == 1; } ) );
+            }
+        }
+
+        WHEN( "the file reaches it, and the user rotates it before the request is handled" )
+        {
+            REQUIRE( proc.sendData( "a command longer than the limit", TxLineEnding::CRLF ) );
+            REQUIRE_FALSE( proc.rotateLog().isEmpty() );
+            serial_test::processEventsFor( 50 );
+
+            THEN( "no rotation is asked for: the new file is empty" )
+            {
+                REQUIRE( session.sizeLimitRequests == 0 );
+            }
+        }
+
+        WHEN( "the file reaches it, and the session stops before the request is handled" )
+        {
+            session.port->deliver( "0123456789\nabcdefghij\n" );
+            proc.stop();
+            serial_test::processEventsFor( 50 );
+
+            THEN( "no rotation is asked for" )
+            {
+                REQUIRE( session.sizeLimitRequests == 0 );
+            }
+        }
+    }
+}
 
 #ifdef Q_OS_UNIX
 SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
 {
-    GIVEN( "a running session writing to a generated file in the log directory" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto savePath = SerialProcess::generateLogPath( logDir.path(), device.devicePath() );
-
-        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
-        REQUIRE( proc.start() );
-        REQUIRE( device.send( "first\nsecond\n" ) );
-        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
-
-        WHEN( "rotating within the same second" )
-        {
-            const auto newPath = proc.rotateLog();
-
-            THEN( "the capture continues in a different file" )
-            {
-                REQUIRE_FALSE( newPath.isEmpty() );
-                REQUIRE( newPath != savePath );
-                REQUIRE( proc.tempFilePath() == newPath );
-                REQUIRE( QFileInfo::exists( newPath ) );
-            }
-
-            THEN( "the old file keeps its content" )
-            {
-                REQUIRE( readFile( savePath ) == "first\nsecond\n" );
-            }
-        }
-    }
-
     GIVEN( "a running session writing to a temporary file" )
     {
         FakeHost host;
@@ -604,327 +815,67 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
             {
                 REQUIRE( readFile( oldPath ) == "first\nsecond\n" );
             }
-        }
-    }
 
-    GIVEN( "a running session whose log directory no longer accepts new files" )
-    {
-        if ( !ReadOnlyDir::isEnforced() ) {
-            WARN( "File permissions are not enforced (running as root?); skipped." );
-            return;
-        }
-
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto savePath = logDir.filePath( "capture.log" );
-
-        QStringList errors;
-        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
-        QObject::connect( &proc, &SerialProcess::errorOccurred,
-                          [ &errors ]( const QString& message ) { errors << message; } );
-        REQUIRE( proc.start() );
-        REQUIRE( device.send( "first\n" ) );
-        REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-
-        WHEN( "rotating fails" )
-        {
-            QString newPath;
+            THEN( "the device's output goes to the new file" )
             {
-                ReadOnlyDir readOnly( logDir.path() );
-                newPath = proc.rotateLog();
-            }
-            REQUIRE( device.send( "after\n" ) );
-
-            THEN( "the failure is reported once and the session keeps running" )
-            {
-                REQUIRE( newPath.isEmpty() );
-                REQUIRE( errors.size() == 1 );
-                REQUIRE( proc.isRunning() );
-            }
-
-            THEN( "later output still reaches the old file" )
-            {
-                REQUIRE( proc.tempFilePath() == savePath );
-                REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
-                REQUIRE( readFile( savePath ) == "first\nafter\n" );
-            }
-        }
-
-        AND_WHEN( "rotating fails and the old file cannot be reopened either" )
-        {
-            int finishedCount = 0;
-            QObject::connect( &proc, &SerialProcess::finished,
-                              [ &finishedCount ]() { ++finishedCount; } );
-            QString newPath;
-            {
-                QFile::setPermissions( savePath, QFileDevice::ReadOwner );
-                ReadOnlyDir readOnly( logDir.path() );
-                newPath = proc.rotateLog();
-            }
-
-            THEN( "the session stops instead of running without a file" )
-            {
-                REQUIRE( newPath.isEmpty() );
-                REQUIRE( errors.size() == 1 );
-                REQUIRE_FALSE( proc.isRunning() );
-                REQUIRE( finishedCount == 1 );
-            }
-        }
-    }
-}
-#endif
-
-#ifdef Q_OS_UNIX
-SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialprocess]" )
-{
-    GIVEN( "a running session whose log file may hold 16 bytes" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 16;
-        SerialProcess proc( host, cfg );
-        int requests = 0;
-        QObject::connect( &proc, &SerialProcess::sizeLimitReached,
-                          [ &requests ]() { ++requests; } );
-        REQUIRE( proc.start() );
-        const auto oldPath = proc.tempFilePath();
-
-        WHEN( "the file stays below it" )
-        {
-            REQUIRE( device.send( "0123456789\n" ) );
-            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-            serial_test::processEventsFor( 100 );
-
-            THEN( "no rotation is asked for" )
-            {
-                REQUIRE( requests == 0 );
-            }
-        }
-
-        WHEN( "the file reaches it, and the user rotates it before the request is handled" )
-        {
-            REQUIRE( proc.sendData( "a command longer than the limit", TxLineEnding::CRLF ) );
-            REQUIRE_FALSE( proc.rotateLog().isEmpty() );
-            serial_test::processEventsFor( 100 );
-
-            THEN( "no rotation is asked for: the new file is empty" )
-            {
-                REQUIRE( requests == 0 );
-            }
-        }
-
-        WHEN( "the file reaches it, and grows on while nobody rotates it" )
-        {
-            REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
-            REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
-            REQUIRE( device.send( "more\nand more\n" ) );
-            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 4; } ) );
-            serial_test::processEventsFor( 100 );
-
-            THEN( "a rotation is asked for once" )
-            {
-                REQUIRE( requests == 1 );
-            }
-
-            AND_WHEN( "it is rotated in the middle of a line" )
-            {
-                REQUIRE( device.send( "par" ) );
-                serial_test::processEventsFor( 100 );
-                const auto newPath = proc.rotateLog( SerialProcess::PartialLine::Keep );
-                REQUIRE( device.send( "tial\n" ) );
+                REQUIRE( device.send( "third\n" ) );
                 REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-
-                THEN( "the line goes whole to the new file" )
-                {
-                    REQUIRE( readFile( newPath ) == "partial\n" );
-                    REQUIRE( readFile( oldPath ) == "0123456789\nabcdefghij\nmore\nand more\n" );
-                }
-
-                AND_WHEN( "the new file reaches it" )
-                {
-                    REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
-
-                    THEN( "a rotation is asked for again" )
-                    {
-                        REQUIRE( waitFor( [ &requests ]() { return requests == 2; } ) );
-                    }
-                }
-            }
-        }
-    }
-
-    GIVEN( "a session at the limit whose log directory no longer accepts new files" )
-    {
-        if ( !ReadOnlyDir::isEnforced() ) {
-            WARN( "File permissions are not enforced (running as root?); skipped." );
-            return;
-        }
-
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 16;
-        SerialProcess proc( host, cfg, logDir.filePath( "capture.log" ) );
-        int requests = 0;
-        QObject::connect( &proc, &SerialProcess::sizeLimitReached, [ & ]() {
-            ++requests;
-            const ReadOnlyDir readOnly( logDir.path() );
-            proc.rotateLog( SerialProcess::PartialLine::Keep );
-        } );
-        REQUIRE( proc.start() );
-        REQUIRE( device.send( "0123456789\nabcdefghij\n" ) );
-        REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
-
-        THEN( "the next rotation is due once the file has grown by the limit again" )
-        {
-            REQUIRE( proc.rotationCount() == 0 );
-            REQUIRE( proc.nextRotationSize() == proc.fileSize() + 16 );
-        }
-
-        WHEN( "the file grows by less than the limit again" )
-        {
-            REQUIRE( device.send( "short\n" ) );
-            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 3; } ) );
-            serial_test::processEventsFor( 100 );
-
-            THEN( "the failed rotation is not retried on every line" )
-            {
-                REQUIRE( requests == 1 );
-            }
-
-            AND_WHEN( "it has grown by the limit since the failed rotation" )
-            {
-                REQUIRE( device.send( "0123456789\n" ) );
-
-                THEN( "a rotation is asked for again" )
-                {
-                    REQUIRE( waitFor( [ &requests ]() { return requests == 2; } ) );
-                }
-            }
-        }
-    }
-
-    GIVEN( "a running session without a size limit" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 0;
-        SerialProcess proc( host, cfg );
-        int requests = 0;
-        QObject::connect( &proc, &SerialProcess::sizeLimitReached,
-                          [ &requests ]() { ++requests; } );
-        REQUIRE( proc.start() );
-
-        WHEN( "the device sends a lot" )
-        {
-            REQUIRE( device.send( QByteArray( 900, 'x' ) + "\n" ) );
-            REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-            serial_test::processEventsFor( 100 );
-
-            THEN( "no rotation is asked for" )
-            {
-                REQUIRE( requests == 0 );
-            }
-        }
-    }
-
-    GIVEN( "a save path that already holds more than the limit" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto savePath = logDir.filePath( "capture.log" );
-        {
-            QFile earlier( savePath );
-            REQUIRE( earlier.open( QIODevice::WriteOnly ) );
-            earlier.write( QByteArray( 64, 'x' ) + "\n" );
-        }
-        auto cfg = configFor( device.devicePath() );
-        cfg.maxFileBytes = 16;
-        SerialProcess proc( host, cfg, savePath );
-        int requests = 0;
-        QObject::connect( &proc, &SerialProcess::sizeLimitReached,
-                          [ &requests ]() { ++requests; } );
-        REQUIRE( proc.start() );
-
-        WHEN( "the capture appends its first line" )
-        {
-            REQUIRE( device.send( "first\n" ) );
-
-            THEN( "a rotation is asked for" )
-            {
-                REQUIRE( waitFor( [ &requests ]() { return requests == 1; } ) );
+                REQUIRE( readFile( newPath ) == "third\n" );
             }
         }
     }
 }
 #endif
 
-#ifdef Q_OS_UNIX
 SCENARIO( "destroying a running session does not call back its owner", "[serialprocess]" )
 {
     GIVEN( "a running session with listeners" )
     {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        int signalCount = 0;
-        auto* proc = new SerialProcess( host, configFor( device.devicePath() ) );
-        QObject::connect( proc, &SerialProcess::finished, [ &signalCount ]() { ++signalCount; } );
-        QObject::connect( proc, &SerialProcess::errorOccurred,
-                          [ &signalCount ]( const QString& ) { ++signalCount; } );
-        REQUIRE( proc->start() );
+        SubstituteSession session;
+        REQUIRE( session.proc->start() );
 
         WHEN( "it is destroyed, as when its owner's children are deleted" )
         {
-            delete proc;
+            session.proc.reset();
 
             THEN( "no signal is emitted into the (possibly half-destroyed) owner" )
             {
-                REQUIRE( signalCount == 0 );
+                REQUIRE( session.finishedCount == 0 );
+                REQUIRE( session.errors.isEmpty() );
             }
         }
     }
 }
-#endif
 
 #ifdef Q_OS_UNIX
 SCENARIO( "a log file that cannot be written stops the session and says why", "[serialprocess]" )
 {
     GIVEN( "a running session whose log file may grow by a few bytes only" )
     {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
-        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
-        QStringList errors;
-        QObject::connect( &proc, &SerialProcess::errorOccurred,
-                          [ &errors ]( const QString& message ) { errors << message; } );
-        int finishedCount = 0;
-        QObject::connect( &proc, &SerialProcess::finished,
-                          [ &finishedCount ]() { ++finishedCount; } );
+        SubstituteSession session( savePath );
+        auto& proc = *session.proc;
         REQUIRE( proc.start() );
         serial_test::FileSizeLimit limit( 8 );
         REQUIRE( limit.isActive() );
 
         WHEN( "the device sends more than that, line after line" )
         {
-            REQUIRE( device.send( "first line\nsecond line\nthird line\n" ) );
+            session.port->deliver( "first line\nsecond line\nthird line\n" );
+            session.port->deliver( "fourth line\n" );
             const bool stopped = waitFor( [ &proc ]() { return !proc.isRunning(); } );
-            serial_test::processEventsFor( 100 );
+            serial_test::processEventsFor( 50 );
             limit.lift();
 
             THEN( "the session stops, and the failure is reported once, naming the file" )
             {
                 REQUIRE( stopped );
-                REQUIRE( finishedCount == 1 );
-                REQUIRE( errors.size() == 1 );
-                REQUIRE( errors.first().contains( "Could not write the log file" ) );
-                REQUIRE( errors.first().contains( savePath ) );
+                REQUIRE( session.finishedCount == 1 );
+                REQUIRE( session.errors.size() == 1 );
+                REQUIRE( session.errors.first().startsWith( "Could not write the log file "
+                                                            + savePath + " (" ) );
+                REQUIRE( session.errors.first().endsWith( "); capture stopped." ) );
             }
         }
 
@@ -937,8 +888,8 @@ SCENARIO( "a log file that cannot be written stops the session and says why", "[
             THEN( "the session stops, and the failure is reported once" )
             {
                 REQUIRE( stopped );
-                REQUIRE( errors.size() == 1 );
-                REQUIRE( errors.first().contains( "Could not write the log file" ) );
+                REQUIRE( session.errors.size() == 1 );
+                REQUIRE( session.errors.first().contains( "Could not write the log file" ) );
             }
         }
     }
@@ -989,141 +940,24 @@ SCENARIO( "a typed path is made absolute, and a relative one refused", "[serialp
 }
 
 #ifdef Q_OS_UNIX
-SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
+SCENARIO( "a session whose log file cannot be opened does not start", "[serialprocess]" )
 {
-    GIVEN( "a save path that is a FIFO" )
+    GIVEN( "a session whose save path is not a regular file" )
     {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto fifo = logDir.filePath( "capture.log" );
-        REQUIRE( ::mkfifo( QFile::encodeName( fifo ).constData(), 0600 ) == 0 );
-        SerialProcess proc( host, configFor( device.devicePath() ), fifo );
-        QStringList errors;
-        QObject::connect( &proc, &SerialProcess::errorOccurred,
-                          [ &errors ]( const QString& message ) { errors << message; } );
+        SubstituteSession session( "/dev/null" );
 
         WHEN( "it is started" )
         {
-            QElapsedTimer timer;
-            timer.start();
-            const auto started = proc.start();
+            const auto started = session.proc->start();
 
-            THEN( "it is refused at once, without waiting for a reader" )
+            THEN( "it is refused, says why once, and leaves the device closed" )
             {
                 REQUIRE_FALSE( started );
-                REQUIRE( timer.elapsed() < 2000 );
-                REQUIRE( errors.size() == 1 );
-                REQUIRE( errors.first().contains( "not a regular file" ) );
-                REQUIRE( errors.first().contains( fifo ) );
+                REQUIRE( session.errors.size() == 1 );
+                REQUIRE( session.errors.first().contains( "not a regular file" ) );
+                REQUIRE_FALSE( session.port->isOpen() );
+                REQUIRE_FALSE( session.proc->isRunning() );
             }
-        }
-    }
-
-    GIVEN( "a save path that is a character device" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        SerialProcess proc( host, configFor( device.devicePath() ), "/dev/null" );
-        QStringList errors;
-        QObject::connect( &proc, &SerialProcess::errorOccurred,
-                          [ &errors ]( const QString& message ) { errors << message; } );
-
-        WHEN( "it is started" )
-        {
-            const auto started = proc.start();
-
-            THEN( "it is refused" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE( errors.size() == 1 );
-                REQUIRE( errors.first().contains( "not a regular file" ) );
-            }
-        }
-    }
-
-    GIVEN( "a save path that is a symlink to a file that does not exist" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto target = logDir.filePath( "elsewhere.log" );
-        const auto link = logDir.filePath( "capture.log" );
-        REQUIRE( QFile::link( target, link ) );
-        SerialProcess proc( host, configFor( device.devicePath() ), link );
-
-        WHEN( "it is started" )
-        {
-            const auto started = proc.start();
-
-            THEN( "it is refused, and the link's target is not created" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE_FALSE( QFileInfo::exists( target ) );
-            }
-        }
-    }
-
-    GIVEN( "a save path that is a symlink to an existing log file" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto target = logDir.filePath( "elsewhere.log" );
-        {
-            QFile existing( target );
-            REQUIRE( existing.open( QIODevice::WriteOnly ) );
-            existing.write( "earlier capture\n" );
-        }
-        const auto link = logDir.filePath( "capture.log" );
-        REQUIRE( QFile::link( target, link ) );
-        SerialProcess proc( host, configFor( device.devicePath() ), link );
-
-        WHEN( "it is started" )
-        {
-            const auto started = proc.start();
-
-            THEN( "it is refused, and the target and the link are left as they were" )
-            {
-                REQUIRE_FALSE( started );
-                REQUIRE( readFile( target ) == "earlier capture\n" );
-                REQUIRE( QFileInfo( link ).isSymLink() );
-            }
-        }
-    }
-
-    GIVEN( "a save path that does not exist yet" )
-    {
-        FakeHost host;
-        serial_test::PseudoTerminal device;
-        QTemporaryDir logDir;
-        const auto savePath = logDir.filePath( "capture.log" );
-        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
-
-        WHEN( "it is started" )
-        {
-            REQUIRE( proc.start() );
-
-            THEN( "the file it creates is readable by the user only, and named as the log file" )
-            {
-                struct stat info{};
-                REQUIRE( ::stat( QFile::encodeName( savePath ).constData(), &info ) == 0 );
-                REQUIRE( ( info.st_mode & 0777 ) == 0600 );
-                REQUIRE( proc.tempFilePath() == savePath );
-            }
-
-            AND_WHEN( "the device sends a line" )
-            {
-                REQUIRE( device.send( "first\n" ) );
-
-                THEN( "it reaches the file" )
-                {
-                    REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
-                    REQUIRE( readFile( savePath ) == "first\n" );
-                }
-            }
-
-            proc.stop();
         }
     }
 }

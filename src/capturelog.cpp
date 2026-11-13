@@ -19,19 +19,40 @@
 
 /**
  * @file capturelog.cpp
- * @brief Implementation of CaptureLog — line framing, [TX] lines and counters.
+ * @brief Implementation of CaptureLog — the log file, its rotation, line
+ *        framing, [TX] lines and counters.
  */
 
 #include "capturelog.h"
+#include "tempdirs.h"
 
+#include <QDir>
 #include <QFileDevice>
+#include <QFileInfo>
 #include <QList>
+#include <QRegularExpression>
 
 #include <utility>
+
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace serial_monitor {
 
 namespace {
+
+/// Make a port name usable as part of a file name on every platform.
+QString safeFileName( const QString& portName )
+{
+    auto name = portName;
+    name.replace( QRegularExpression( "[^a-zA-Z0-9._-]" ), "_" );
+    return name;
+}
 
 /**
  * The length of the longest start of @p data that does not end inside a
@@ -152,11 +173,236 @@ CaptureLog::CaptureLog( bool timestamps, Clock clock, qsizetype maxLineLength )
 {
 }
 
+CaptureLog::~CaptureLog() = default;
+
+// ── File names ──────────────────────────────────────────────────────────
+
+QString CaptureLog::generateLogPath( const QString& dir, const QString& portName,
+                                     const QDateTime& timestamp )
+{
+    const QDir logDir( dir );
+    const auto stem = timestamp.toString( "yyyy-MM-dd_HHmmss" ) + "_" + safeFileName( portName );
+
+    auto path = logDir.filePath( stem + ".log" );
+    for ( int n = 2; QFileInfo::exists( path ); ++n ) {
+        path = logDir.filePath( QString( "%1_%2.log" ).arg( stem ).arg( n ) );
+    }
+    return path;
+}
+
+QString CaptureLog::absoluteUserPath( const QString& path )
+{
+    auto expanded = path.trimmed();
+    if ( expanded == QStringLiteral( "~" ) ) {
+        expanded = QDir::homePath();
+    }
+    else if ( expanded.startsWith( QStringLiteral( "~/" ) )
+              || expanded.startsWith( QStringLiteral( "~\\" ) ) ) {
+        expanded = QDir::homePath() + expanded.mid( 1 );
+    }
+    if ( expanded.isEmpty() || QDir::isRelativePath( expanded ) ) {
+        return {};
+    }
+    return QDir::cleanPath( expanded );
+}
+
+// ── The log file ────────────────────────────────────────────────────────
+
+bool CaptureLog::open( const QString& portName, const QString& savePath, const QString& tempRoot,
+                       QString& error )
+{
+    // The path the user typed is checked first: it is theirs to fix,
+    // whatever else would fail.
+    if ( !savePath.isEmpty() && absoluteUserPath( savePath ).isEmpty() ) {
+        error = QString( "The log file %1 is not a full path; give one such as %2." )
+                    .arg( savePath, QDir( QDir::homePath() ).filePath( "serial.log" ) );
+        return false;
+    }
+
+    // Nothing is ever truncated: a save path is appended to, so that Stop
+    // and Start with the same path keep the earlier capture, and the temp
+    // file must be new.
+    QString path;
+    QIODevice::OpenMode mode = QIODevice::WriteOnly;
+    if ( !savePath.isEmpty() ) {
+        path = absoluteUserPath( savePath );
+        QDir().mkpath( QFileInfo( path ).absolutePath() );
+        mode |= QIODevice::Append;
+    }
+    else {
+        if ( !tempDir_ ) {
+            tempDir_ = std::make_unique<QTemporaryDir>( tempDirTemplate( tempRoot ) );
+        }
+        if ( !tempDir_->isValid() ) {
+            error = QStringLiteral( "Failed to create temporary directory." );
+            return false;
+        }
+        path = tempDir_->filePath( "serial_" + safeFileName( portName ) + ".log" );
+        mode |= QIODevice::NewOnly;
+    }
+
+    createdFile_ = !QFileInfo::exists( path );
+    QString openError;
+    if ( !openFile( path, mode, openError ) ) {
+        error = "Failed to open log file " + path + ": " + openError;
+        file_.setFileName( {} );
+        path_.clear();
+        return false;
+    }
+    portName_ = portName;
+    usingSavePath_ = !savePath.isEmpty();
+    saveDir_ = usingSavePath_ ? QFileInfo( path ).absolutePath() : QString();
+    rotationCount_ = 0;
+    start( &file_ );
+    return true;
+}
+
+void CaptureLog::discard()
+{
+    file_.close();
+    if ( createdFile_ && !path_.isEmpty() ) {
+        QFile::remove( path_ );
+    }
+    file_.setFileName( {} );
+    path_.clear();
+}
+
+bool CaptureLog::close()
+{
+    const auto written = endPartialLine();
+    file_.close();
+    return written;
+}
+
+QString CaptureLog::rotate( PartialLine partialLine, QString& error )
+{
+    if ( device_ != &file_ || !file_.isOpen() ) {
+        return {};
+    }
+
+    if ( partialLine == PartialLine::WriteOut ) {
+        // A failure is hasFailed()'s, for the caller to tell.
+        endPartialLine();
+    }
+
+    // In the log directory, a new timestamped file; in the temp dir, the
+    // next number.  Either way the file must be new: opening an existing
+    // one would truncate an earlier capture.
+    const auto newPath = usingSavePath_ ? generateLogPath( saveDir_, portName_ )
+                                        : tempDir_->filePath( QString( "serial_%1_%2.log" )
+                                                                  .arg( safeFileName( portName_ ) )
+                                                                  .arg( rotationCount_ + 1 ) );
+
+    // Close the old file (it stays on disk for the old tab)
+    const auto oldPath = path_;
+    file_.close();
+
+    QString reason;
+    if ( !openFile( newPath, QIODevice::WriteOnly | QIODevice::NewOnly, reason ) ) {
+        // Keep capturing into the old file: a capture left running with a
+        // closed file would silently drop everything from here on.
+        QString reopenError;
+        if ( openFile( oldPath, QIODevice::WriteOnly | QIODevice::Append, reopenError ) ) {
+            error = QString( "Could not rotate the log to %1 (%2); still writing to %3." )
+                        .arg( newPath, reason, oldPath );
+        }
+        else {
+            error = QString( "Could not rotate the log to %1 (%2), nor reopen %3 (%4); "
+                             "capture stopped." )
+                        .arg( newPath, reason, oldPath, reopenError );
+        }
+        return {};
+    }
+
+    ++rotationCount_;
+    startFile( &file_ );
+    return newPath;
+}
+
+QString CaptureLog::keepTempDir()
+{
+    if ( usingSavePath_ || !tempDir_ ) {
+        return {};
+    }
+    tempDir_->setAutoRemove( false );
+    return tempDir_->path();
+}
+
+bool CaptureLog::openFile( const QString& path, QIODevice::OpenMode mode, QString& error )
+{
+    file_.setFileName( path );
+#ifdef Q_OS_UNIX
+    // One open that cannot block on a FIFO nor follow a symlink, then a
+    // check of what was opened: a check before the open could be raced.
+    int flags = O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+    flags |= mode.testFlag( QIODevice::NewOnly ) ? O_EXCL : 0;
+    flags |= mode.testFlag( QIODevice::Append ) ? O_APPEND : 0;
+    const int fd = ::open( QFile::encodeName( path ).constData(), flags, S_IRUSR | S_IWUSR );
+    if ( fd < 0 ) {
+        // A FIFO without a reader (ENXIO) and a symlink (ELOOP) are what
+        // the flags refuse; anything else is the system's own reason.
+        if ( errno == ENXIO ) {
+            error = QStringLiteral( "not a regular file" );
+        }
+        else if ( errno == ELOOP ) {
+            error = QStringLiteral( "a symbolic link, not a regular file" );
+        }
+        else {
+            error = QString::fromLocal8Bit( std::strerror( errno ) );
+        }
+        return false;
+    }
+    struct stat info{};
+    if ( ::fstat( fd, &info ) != 0 || !S_ISREG( info.st_mode ) ) {
+        ::close( fd );
+        error = QStringLiteral( "not a regular file" );
+        return false;
+    }
+    // A regular file never blocks; the flag only kept the open from waiting.
+    ::fcntl( fd, F_SETFL, ::fcntl( fd, F_GETFL ) & ~O_NONBLOCK );
+    if ( !file_.open( fd, mode & ~QIODevice::NewOnly, QFileDevice::AutoCloseHandle ) ) {
+        ::close( fd );
+        error = file_.errorString();
+        return false;
+    }
+    path_ = path;
+    return true;
+#else
+    // Checked before the open, which a rename between the two could race;
+    // Windows has no open that refuses a link or a device by itself.
+    const QFileInfo info( path );
+    if ( info.isSymLink() || ( info.exists() && !info.isFile() ) ) {
+        error = QStringLiteral( "not a regular file" );
+        return false;
+    }
+    if ( !file_.open( mode ) ) {
+        error = file_.errorString();
+        return false;
+    }
+    if ( mode.testFlag( QIODevice::NewOnly ) || !info.exists() ) {
+        file_.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
+    }
+    path_ = path;
+    return true;
+#endif
+}
+
+// ── The size limit ──────────────────────────────────────────────────────
+
+void CaptureLog::setSizeLimit( qint64 bytes, SizeLimitReached reached )
+{
+    sizeLimit_ = bytes;
+    sizeLimitReached_ = std::move( reached );
+}
+
+// ── Writing ─────────────────────────────────────────────────────────────
+
 void CaptureLog::start( QIODevice* file )
 {
     partial_.clear();
     afterCr_ = false;
     failed_ = false;
+    writeError_.clear();
     totalLineCount_ = 0;
     receivedBytes_ = 0;
     startFile( file );
@@ -164,10 +410,11 @@ void CaptureLog::start( QIODevice* file )
 
 void CaptureLog::startFile( QIODevice* file )
 {
-    file_ = file;
+    device_ = file;
     lineCount_ = 0;
     // A file appended to counts with what it holds already.
     fileSize_ = file ? file->size() : 0;
+    nextRotationAt_ = sizeLimit_;
 }
 
 bool CaptureLog::receive( const QByteArray& data )
@@ -209,7 +456,7 @@ bool CaptureLog::endPartialLine()
 
 bool CaptureLog::writeLine( const QByteArray& line )
 {
-    if ( failed_ || !file_ ) {
+    if ( failed_ || !device_ ) {
         return false;
     }
     QByteArray record;
@@ -218,27 +465,44 @@ bool CaptureLog::writeLine( const QByteArray& line )
     }
     record += escapeControls( line );
     record += '\n';
-    if ( file_->write( record ) != record.size() ) {
-        failed_ = true;
+    if ( device_->write( record ) != record.size() ) {
+        fail();
         return false;
     }
     ++lineCount_;
     ++totalLineCount_;
     fileSize_ += record.size();
+    // A rotation that fails keeps the capture in this file: it is asked for
+    // again once the file has grown by the limit once more, as asking on
+    // every line would report the failure on every line.
+    if ( sizeLimit_ > 0 && fileSize_ >= nextRotationAt_ ) {
+        nextRotationAt_ = fileSize_ + sizeLimit_;
+        if ( sizeLimitReached_ ) {
+            sizeLimitReached_();
+        }
+    }
     return true;
 }
 
 bool CaptureLog::flush()
 {
-    if ( failed_ || !file_ ) {
+    if ( failed_ || !device_ ) {
         return false;
     }
-    auto* fileDevice = qobject_cast<QFileDevice*>( file_ );
+    auto* fileDevice = qobject_cast<QFileDevice*>( device_ );
     if ( fileDevice && !fileDevice->flush() ) {
-        failed_ = true;
+        fail();
         return false;
     }
     return true;
+}
+
+void CaptureLog::fail()
+{
+    failed_ = true;
+    const auto path = device_ == &file_ ? path_ : QString();
+    writeError_
+        = QString( "Could not write the log file %1 (%2)" ).arg( path, device_->errorString() );
 }
 
 } // namespace serial_monitor

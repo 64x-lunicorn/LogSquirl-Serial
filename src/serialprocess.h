@@ -24,6 +24,8 @@
  * Each SerialProcess instance wraps a single QSerialPort connection.
  * Output is written to a temporary file (and optionally a user-chosen file)
  * so that LogSquirl can open it with follow/tail mode via the host API.
+ * The serial capture is an adapter between the port and its CaptureLog
+ * (capturelog.h), which owns the log file, its rotation and its size limit.
  *
  * THREAD MODEL
  * ────────────
@@ -48,13 +50,14 @@
 #include "host.h"
 
 #include <QDateTime>
-#include <QFile>
+#include <QIODevice>
 #include <QObject>
 #include <QSerialPort>
 #include <QSerialPortInfo>
 #include <QString>
 #include <QStringList>
-#include <QTemporaryDir>
+
+#include <memory>
 
 namespace serial_monitor {
 
@@ -104,7 +107,8 @@ struct SerialConfig {
  *     named after the process (see tempdirs.h).
  *
  * When a savePath is provided the temporary directory is not used,
- * avoiding orphaned temp files that fill up disk space.
+ * avoiding orphaned temp files that fill up disk space.  Which file, and
+ * what is written to it, is its CaptureLog's (capturelog.h).
  *
  * The file path returned by tempFilePath() is what the host opens
  * via open_file().
@@ -125,6 +129,17 @@ public:
      */
     SerialProcess( Host& host, const SerialConfig& config, const QString& savePath = {},
                    QObject* parent = nullptr );
+
+    /**
+     * Construct a session that captures from @p device, which it takes,
+     * in place of a serial port of @p config: for tests, which play the
+     * device.  start() opens it for reading and writing (it must be closed
+     * until then), and a read from it that fails ends the session as an
+     * error of the port does.  A QSerialPort handed in is configured and
+     * its errors are handled as those of the session's own port.
+     */
+    SerialProcess( Host& host, const SerialConfig& config, const QString& savePath,
+                   std::unique_ptr<QIODevice> device, QObject* parent = nullptr );
 
     /** Closes the port without emitting any signal. */
     ~SerialProcess() override;
@@ -153,35 +168,20 @@ public:
     static QStringList filterPorts( const QList<QSerialPortInfo>& ports );
 
     /// What rotateLog() does with the part of a line received so far.
-    enum class PartialLine {
-        WriteOut, ///< End it in the old file, as a line of its own.
-        Keep      ///< Keep it for the new file, where the rest of it goes.
-    };
+    using PartialLine = CaptureLog::PartialLine;
 
-    /**
-     * Return a path for a new log file in @p dir, named
-     * `<yyyy-MM-dd_HHmmss>_<port>.log`.  Characters of the port name that
-     * are not valid in file names (the '/' of "/dev/ttyUSB0") are
-     * replaced by '_'.  If that file exists, a number is appended
-     * (`…_2.log`, `…_3.log`, …), so that two captures within the same
-     * second never share a file.
-     *
-     * @param dir        Directory the file will be created in.
-     * @param portName   Serial port name.
-     * @param timestamp  Time the capture starts.
-     * @return Absolute path of a file that does not exist yet.
-     */
+    /// CaptureLog::generateLogPath(): a new timestamped log file in @p dir.
     static QString generateLogPath( const QString& dir, const QString& portName,
-                                    const QDateTime& timestamp = QDateTime::currentDateTime() );
+                                    const QDateTime& timestamp = QDateTime::currentDateTime() )
+    {
+        return CaptureLog::generateLogPath( dir, portName, timestamp );
+    }
 
-    /**
-     * The path a user typed, made absolute: a leading `~` is the home
-     * directory, and the path is cleaned.  Empty for a path that is still
-     * relative, as `open_file()` takes absolute paths only and LogSquirl's
-     * working directory is nothing the user chose (`/` when started from
-     * the Finder or the Dock).
-     */
-    static QString absoluteUserPath( const QString& path );
+    /// CaptureLog::absoluteUserPath(): the path a user typed, made absolute.
+    static QString absoluteUserPath( const QString& path )
+    {
+        return CaptureLog::absoluteUserPath( path );
+    }
 
     // ── Instance methods ─────────────────────────────────────────────
 
@@ -230,8 +230,8 @@ public:
     QString preserveTempFile();
 
     /**
-     * Rotate the log file: close the current temp file and open a new
-     * one in the same temp directory.  The old file is preserved so the
+     * Rotate the log file (CaptureLog::rotate()): close the current file
+     * and open a new one beside it.  The old file is preserved so the
      * existing LogSquirl tab keeps its content.  New serial output is
      * redirected to the new file.
      *
@@ -267,12 +267,15 @@ public:
      * be opened in LogSquirl via host->open_file().  It is only valid
      * after start() is called.
      */
-    QString tempFilePath() const;
+    QString tempFilePath() const
+    {
+        return log_.path();
+    }
 
     /** Whether the session writes directly to a user-specified save path. */
     bool isUsingSavePath() const
     {
-        return usingSavePath_;
+        return log_.isUsingSavePath();
     }
 
     // ── Counters ─────────────────────────────────────────────────────
@@ -280,7 +283,7 @@ public:
     // What the session has done since start(): read them at any time, from
     // the main thread.  None of them emits a signal when it changes, as most
     // change on every line; a view that shows them live reads them on a
-    // timer of its own.  The line and byte counters are its CaptureLog's.
+    // timer of its own.  All but the start time are its CaptureLog's.
 
     /** Lines written to the current log file; 0 again after each rotation. */
     qint64 lineCount() const
@@ -316,7 +319,7 @@ public:
     /** How often the log has been rotated (rotateLog() that succeeded). */
     int rotationCount() const
     {
-        return rotationCount_;
+        return log_.rotationCount();
     }
 
     /**
@@ -326,7 +329,7 @@ public:
      */
     qint64 nextRotationSize() const
     {
-        return config_.maxFileBytes > 0 ? nextRotationAt_ : 0;
+        return log_.nextRotationSize();
     }
 
     /** When start() last opened the port; invalid before. */
@@ -356,8 +359,8 @@ Q_SIGNALS:
      */
     void sizeLimitReached();
 
-private Q_SLOTS:
-    /** Handle new data available on the serial port. */
+private:
+    /** Handle new data available on the device. */
     void onReadyRead();
 
     /**
@@ -367,42 +370,27 @@ private Q_SLOTS:
      */
     void onPortError( QSerialPort::SerialPortError error );
 
-private:
-    /// After log_ wrote (@p ok: it could): fail the session if it could not
-    /// (failWrite()), else ask for a rotation if the file reached its limit.
+    /// The device failed (@p message says how): say so once and stop the
+    /// session, from the event loop.
+    void failPort( const QString& message );
+
+    /// After log_ wrote (@p ok: it could): fail the session if it could not.
     void logged( bool ok );
 
     /// The log file cannot be written (disk full, volume gone): say so once
     /// and stop the session, rather than drop every line from here on.
     void failWrite();
 
-    /// Open @p path for the capture with @p mode, refusing anything that is
-    /// not a regular file: a FIFO would block the UI thread, a symlink lead
-    /// elsewhere, a device take the capture.  A file it creates is readable
-    /// by the user only.  False, with the reason in @p error.
-    bool openLogFile( const QString& path, QIODevice::OpenMode mode, QString& error );
-
-    /** Close the log file after a failed start; remove it if start() created it. */
-    void discardLogFile();
-
     Host& host_;
     SerialConfig config_;
     QString savePath_;
 
-    QSerialPort port_;
-    QTemporaryDir tempDir_;
-    QFile tempFile_;
-    /// The log file open in tempFile_, which an open by descriptor leaves
-    /// without a name; empty while none is.
-    QString logPath_;
-    CaptureLog log_;              ///< What is written to tempFile_, and counted.
-    QDateTime startTime_;         ///< When start() opened the port.
-    int rotationCount_ = 0;       ///< Incremented on each successful rotateLog().
-    bool usingSavePath_ = false;  ///< True when writing directly to the log directory.
-    bool createdLogFile_ = false; ///< True when start() created the log file.
-    bool portFailed_ = false;     ///< True once the open port reported an error.
-    bool writeFailed_ = false;    ///< True once a failed write to the log file was reported.
-    qint64 nextRotationAt_ = 0;   ///< Size at which sizeLimitReached() is due.
+    QIODevice* device_;        ///< What is captured from: port_, or a device handed in.
+    QSerialPort* port_;        ///< device_ as a serial port; null if it is none.
+    CaptureLog log_;           ///< The log file, and what is written to it.
+    QDateTime startTime_;      ///< When start() opened the port.
+    bool portFailed_ = false;  ///< True once the open port reported an error.
+    bool writeFailed_ = false; ///< True once a failed write to the log file was reported.
 };
 
 } // namespace serial_monitor

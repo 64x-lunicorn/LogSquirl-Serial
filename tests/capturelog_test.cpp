@@ -31,17 +31,70 @@
  * so the part of a line kept must not grow without bound.  A CR ends its
  * line at once, even when it is the last byte read: a device that ends
  * lines with a lone CR must not see each line appear one line late.
+ *
+ * The scenarios of the log file itself (the save path or the temporary
+ * directory, regular files only, rotation, the size limit) write to real
+ * files in temporary directories; those of a rotation that fails make the
+ * directory read-only (readonlydir.h).
  */
 
 #include <catch2/catch.hpp>
 
 #include "capturelog.h"
+#include "readonlydir.h"
 
 #include <QBuffer>
+#include <QCoreApplication>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFileInfo>
+#include <QTemporaryDir>
+
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
 using serial_monitor::CaptureLog;
+using serial_test::ReadOnlyDir;
+using PartialLine = serial_monitor::CaptureLog::PartialLine;
 
 namespace {
+
+/// The port the file captures are named after.
+const QString kPort = "/dev/ttyUSB0";
+
+QByteArray readFile( const QString& path )
+{
+    QFile file( path );
+    return file.open( QIODevice::ReadOnly ) ? file.readAll() : QByteArray();
+}
+
+void writeFile( const QString& path, const QByteArray& data )
+{
+    QFile file( path );
+    REQUIRE( file.open( QIODevice::WriteOnly ) );
+    REQUIRE( file.write( data ) == data.size() );
+}
+
+/**
+ * A CaptureLog open on a log file of its own, without timestamps: the save
+ * path, or a temporary file below a temporary root of the test's own.  It
+ * records the file's size at each request of the size limit, if it has one.
+ */
+struct FileCapture {
+    explicit FileCapture( const QString& savePath = {}, qint64 sizeLimit = 0 )
+    {
+        log.setSizeLimit( sizeLimit, [ this ]() { requests << log.fileSize(); } );
+        opened = log.open( kPort, savePath, root.path(), error );
+    }
+
+    QTemporaryDir root; ///< The temporary root; declared first, removed last.
+    CaptureLog log{ false };
+    bool opened = false;
+    QString error;
+    QList<qint64> requests; ///< fileSize() at each request of the size limit.
+};
 
 /// A CaptureLog writing to a buffer, without timestamps unless asked.
 struct Capture {
@@ -520,7 +573,11 @@ SCENARIO( "a capture counts lines and bytes", "[capturelog][counters]" )
             REQUIRE( log.totalLineCount() == 0 );
             REQUIRE( log.receivedBytes() == 0 );
             REQUIRE( log.fileSize() == 0 );
+            REQUIRE( log.rotationCount() == 0 );
+            REQUIRE( log.nextRotationSize() == 0 );
             REQUIRE_FALSE( log.hasFailed() );
+            REQUIRE_FALSE( log.isOpen() );
+            REQUIRE( log.path().isEmpty() );
         }
     }
 
@@ -550,32 +607,6 @@ SCENARIO( "a capture counts lines and bytes", "[capturelog][counters]" )
                     REQUIRE( capture.log.totalLineCount() == 4 );
                     REQUIRE( capture.log.receivedBytes() == 17 );
                     REQUIRE( capture.log.fileSize() == 13 + 4 + 9 ); // "thi\n[TX] cmd\n"
-                }
-            }
-
-            AND_WHEN( "it goes on in a new file, and the device ends its line" )
-            {
-                QBuffer next;
-                next.open( QIODevice::WriteOnly );
-                capture.log.startFile( &next );
-                REQUIRE( capture.log.receive( "rd\n" ) );
-
-                THEN( "the line goes whole to the new file" )
-                {
-                    REQUIRE( next.data() == "third\n" );
-                    REQUIRE( capture.written() == "first\nsecond\n" );
-                }
-
-                THEN( "the new file's lines and size start again" )
-                {
-                    REQUIRE( capture.log.lineCount() == 1 );
-                    REQUIRE( capture.log.fileSize() == 6 );
-                }
-
-                THEN( "the lines and bytes of the whole capture go on" )
-                {
-                    REQUIRE( capture.log.totalLineCount() == 3 );
-                    REQUIRE( capture.log.receivedBytes() == 20 );
                 }
             }
 
@@ -637,6 +668,7 @@ SCENARIO( "a log file that cannot be written fails the capture", "[capturelog]" 
             {
                 REQUIRE_FALSE( written );
                 REQUIRE( log.hasFailed() );
+                REQUIRE( log.writeError().startsWith( "Could not write the log file" ) );
                 REQUIRE( log.lineCount() == 0 );
                 REQUIRE( log.fileSize() == 0 );
                 REQUIRE( log.receivedBytes() == 13 );
@@ -661,6 +693,7 @@ SCENARIO( "a log file that cannot be written fails the capture", "[capturelog]" 
                 {
                     REQUIRE( log.receive( "again\n" ) );
                     REQUIRE_FALSE( log.hasFailed() );
+                    REQUIRE( log.writeError().isEmpty() );
                     REQUIRE( next.data() == "again\n" );
                 }
             }
@@ -675,6 +708,650 @@ SCENARIO( "a log file that cannot be written fails the capture", "[capturelog]" 
         {
             REQUIRE_FALSE( log.receive( "first\n" ) );
             REQUIRE_FALSE( log.send( "cmd" ) );
+        }
+    }
+}
+
+SCENARIO( "a capture opens a log file of its own", "[capturelog][files]" )
+{
+    GIVEN( "no save path" )
+    {
+        FileCapture capture;
+
+        THEN( "it writes to a new file named after the port, in a directory of its own below "
+              "the temporary root" )
+        {
+            REQUIRE( capture.opened );
+            REQUIRE( capture.log.isOpen() );
+            REQUIRE_FALSE( capture.log.isUsingSavePath() );
+            const QFileInfo file( capture.log.path() );
+            REQUIRE( file.fileName() == "serial__dev_ttyUSB0.log" );
+            REQUIRE( file.dir().dirName().startsWith(
+                QString( "logsquirl-serial-%1-" ).arg( QCoreApplication::applicationPid() ) ) );
+            REQUIRE( QFileInfo( file.absolutePath() ).absolutePath()
+                     == QFileInfo( capture.root.path() ).absoluteFilePath() );
+        }
+
+        WHEN( "a line is received" )
+        {
+            REQUIRE( capture.log.receive( "first\n" ) );
+
+            THEN( "it is in the file at once" )
+            {
+                REQUIRE( readFile( capture.log.path() ) == "first\n" );
+            }
+        }
+
+        WHEN( "the capture is closed with part of a line received" )
+        {
+            REQUIRE( capture.log.receive( "first\nsec" ) );
+            REQUIRE( capture.log.close() );
+
+            THEN( "the part is written as a line of its own, and the file kept" )
+            {
+                REQUIRE_FALSE( capture.log.isOpen() );
+                REQUIRE( readFile( capture.log.path() ) == "first\nsec\n" );
+            }
+        }
+
+#ifdef Q_OS_UNIX
+        THEN( "the file is readable by the user only" )
+        {
+            struct stat info{};
+            REQUIRE( ::stat( QFile::encodeName( capture.log.path() ).constData(), &info ) == 0 );
+            REQUIRE( ( info.st_mode & 0777 ) == 0600 );
+        }
+#endif
+    }
+
+    GIVEN( "a capture into a temporary file, closed" )
+    {
+        QTemporaryDir root;
+        QString error;
+        QString path;
+        QString kept;
+
+        WHEN( "it is destroyed" )
+        {
+            {
+                CaptureLog log( false );
+                REQUIRE( log.open( kPort, {}, root.path(), error ) );
+                path = log.path();
+                log.close();
+            }
+
+            THEN( "its temporary directory is removed" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( path ) );
+                REQUIRE_FALSE( QFileInfo::exists( QFileInfo( path ).absolutePath() ) );
+            }
+        }
+
+        WHEN( "its temporary directory is kept, and it is destroyed" )
+        {
+            {
+                CaptureLog log( false );
+                REQUIRE( log.open( kPort, {}, root.path(), error ) );
+                REQUIRE( log.receive( "first\n" ) );
+                path = log.path();
+                kept = log.keepTempDir();
+                log.close();
+            }
+
+            THEN( "the directory and its file stay, for the tab that shows it" )
+            {
+                REQUIRE( kept == QFileInfo( path ).absolutePath() );
+                REQUIRE( readFile( path ) == "first\n" );
+                QDir( kept ).removeRecursively();
+            }
+        }
+    }
+
+    GIVEN( "a save path in a directory that does not exist yet" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "logs/capture.log" );
+        FileCapture capture( savePath );
+
+        THEN( "the directory is created and the file written to" )
+        {
+            REQUIRE( capture.opened );
+            REQUIRE( capture.log.isUsingSavePath() );
+            REQUIRE( capture.log.path() == savePath );
+            REQUIRE( capture.log.receive( "first\n" ) );
+            REQUIRE( readFile( savePath ) == "first\n" );
+        }
+
+        THEN( "there is no temporary directory to keep" )
+        {
+            REQUIRE( capture.log.keepTempDir().isEmpty() );
+        }
+    }
+
+    GIVEN( "a save path that already holds a capture" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        writeFile( savePath, "earlier\n" );
+        FileCapture capture( savePath );
+
+        WHEN( "a line is received" )
+        {
+            REQUIRE( capture.log.receive( "new\n" ) );
+
+            THEN( "it is appended, and the file's size counts what it held" )
+            {
+                REQUIRE( readFile( savePath ) == "earlier\nnew\n" );
+                REQUIRE( capture.log.fileSize() == 12 );
+            }
+        }
+
+        WHEN( "the capture is discarded, as when its port did not open" )
+        {
+            capture.log.discard();
+
+            THEN( "the earlier capture is kept" )
+            {
+                REQUIRE( readFile( savePath ) == "earlier\n" );
+                REQUIRE( capture.log.path().isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a save path that does not exist yet, opened" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        FileCapture capture( savePath );
+        REQUIRE( capture.opened );
+
+        WHEN( "the capture is discarded" )
+        {
+            capture.log.discard();
+
+            THEN( "the file it created is removed" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( savePath ) );
+                REQUIRE_FALSE( capture.log.isOpen() );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is not a full path" )
+    {
+        FileCapture capture( "relative-capture.log" );
+
+        THEN( "it is refused, saying why, and nothing is created in the working directory" )
+        {
+            REQUIRE_FALSE( capture.opened );
+            REQUIRE( capture.error.contains( "not a full path" ) );
+            REQUIRE_FALSE( QFileInfo::exists( "relative-capture.log" ) );
+            REQUIRE( capture.log.path().isEmpty() );
+        }
+    }
+
+    GIVEN( "a temporary root that refuses new directories" )
+    {
+        if ( !ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+        QTemporaryDir root;
+        CaptureLog log( false );
+        QString error;
+        bool opened = true;
+        {
+            const ReadOnlyDir readOnly( root.path() );
+            opened = log.open( kPort, {}, root.path(), error );
+        }
+
+        THEN( "no file is opened, and it says why" )
+        {
+            REQUIRE_FALSE( opened );
+            REQUIRE( error == "Failed to create temporary directory." );
+        }
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "only a regular file is opened as the log file", "[capturelog][files]" )
+{
+    GIVEN( "a save path that is a FIFO" )
+    {
+        QTemporaryDir logDir;
+        const auto fifo = logDir.filePath( "capture.log" );
+        REQUIRE( ::mkfifo( QFile::encodeName( fifo ).constData(), 0600 ) == 0 );
+
+        WHEN( "it is opened" )
+        {
+            QElapsedTimer timer;
+            timer.start();
+            FileCapture capture( fifo );
+
+            THEN( "it is refused at once, without waiting for a reader" )
+            {
+                REQUIRE_FALSE( capture.opened );
+                REQUIRE( timer.elapsed() < 2000 );
+                REQUIRE( capture.error.contains( "not a regular file" ) );
+                REQUIRE( capture.error.contains( fifo ) );
+            }
+        }
+    }
+
+    GIVEN( "a save path that is a character device" )
+    {
+        FileCapture capture( "/dev/null" );
+
+        THEN( "it is refused" )
+        {
+            REQUIRE_FALSE( capture.opened );
+            REQUIRE( capture.error.contains( "not a regular file" ) );
+        }
+    }
+
+    GIVEN( "a save path that is a symlink to a file that does not exist" )
+    {
+        QTemporaryDir logDir;
+        const auto target = logDir.filePath( "elsewhere.log" );
+        const auto link = logDir.filePath( "capture.log" );
+        REQUIRE( QFile::link( target, link ) );
+        FileCapture capture( link );
+
+        THEN( "it is refused, and the link's target is not created" )
+        {
+            REQUIRE_FALSE( capture.opened );
+            REQUIRE_FALSE( QFileInfo::exists( target ) );
+        }
+    }
+
+    GIVEN( "a save path that is a symlink to an existing log file" )
+    {
+        QTemporaryDir logDir;
+        const auto target = logDir.filePath( "elsewhere.log" );
+        writeFile( target, "earlier capture\n" );
+        const auto link = logDir.filePath( "capture.log" );
+        REQUIRE( QFile::link( target, link ) );
+        FileCapture capture( link );
+
+        THEN( "it is refused, and the target and the link are left as they were" )
+        {
+            REQUIRE_FALSE( capture.opened );
+            REQUIRE( readFile( target ) == "earlier capture\n" );
+            REQUIRE( QFileInfo( link ).isSymLink() );
+        }
+    }
+}
+#endif
+
+SCENARIO( "a capture is rotated into a new file", "[capturelog][rotation]" )
+{
+    GIVEN( "a capture into a temporary file that has received two lines and part of a third" )
+    {
+        FileCapture capture;
+        REQUIRE( capture.opened );
+        const auto oldPath = capture.log.path();
+        REQUIRE( capture.log.receive( "first\r\nsecond\nthi" ) );
+        QString error;
+
+        WHEN( "it is rotated, the partial line written out" )
+        {
+            const auto newPath = capture.log.rotate( PartialLine::WriteOut, error );
+
+            THEN( "the capture goes on in the next file of its temporary directory" )
+            {
+                REQUIRE( error.isEmpty() );
+                REQUIRE( newPath
+                         == QFileInfo( oldPath ).dir().filePath( "serial__dev_ttyUSB0_1.log" ) );
+                REQUIRE( capture.log.path() == newPath );
+                REQUIRE( capture.log.isOpen() );
+                REQUIRE( capture.log.rotationCount() == 1 );
+            }
+
+            THEN( "the old file keeps its content, the partial line ended in it" )
+            {
+                REQUIRE( readFile( oldPath ) == "first\nsecond\nthi\n" );
+                REQUIRE( readFile( newPath ).isEmpty() );
+            }
+
+            AND_WHEN( "it is rotated again" )
+            {
+                const auto nextPath = capture.log.rotate( PartialLine::WriteOut, error );
+
+                THEN( "the files are numbered on" )
+                {
+                    REQUIRE( QFileInfo( nextPath ).fileName() == "serial__dev_ttyUSB0_2.log" );
+                    REQUIRE( capture.log.rotationCount() == 2 );
+                }
+            }
+        }
+
+        WHEN( "it is rotated keeping the partial line, and the device ends its line" )
+        {
+            const auto newPath = capture.log.rotate( PartialLine::Keep, error );
+            REQUIRE( capture.log.receive( "rd\n" ) );
+
+            THEN( "the line goes whole to the new file" )
+            {
+                REQUIRE( readFile( newPath ) == "third\n" );
+                REQUIRE( readFile( oldPath ) == "first\nsecond\n" );
+            }
+
+            THEN( "the new file's lines and size start again" )
+            {
+                REQUIRE( capture.log.lineCount() == 1 );
+                REQUIRE( capture.log.fileSize() == 6 );
+            }
+
+            THEN( "the lines and bytes of the whole capture go on" )
+            {
+                REQUIRE( capture.log.totalLineCount() == 3 );
+                REQUIRE( capture.log.receivedBytes() == 20 );
+            }
+        }
+    }
+
+    GIVEN( "a capture into a generated file in its log directory" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = CaptureLog::generateLogPath( logDir.path(), kPort );
+        FileCapture capture( savePath );
+        REQUIRE( capture.opened );
+        REQUIRE( capture.log.receive( "first\nsecond\n" ) );
+
+        WHEN( "it is rotated within the same second" )
+        {
+            QString error;
+            const auto newPath = capture.log.rotate( PartialLine::WriteOut, error );
+
+            THEN( "the capture goes on in a different file of that directory" )
+            {
+                REQUIRE_FALSE( newPath.isEmpty() );
+                REQUIRE( newPath != savePath );
+                REQUIRE( QFileInfo( newPath ).absolutePath()
+                         == QFileInfo( savePath ).absolutePath() );
+                REQUIRE( capture.log.path() == newPath );
+                REQUIRE( capture.log.receive( "third\n" ) );
+                REQUIRE( readFile( newPath ) == "third\n" );
+            }
+
+            THEN( "the old file keeps its content" )
+            {
+                REQUIRE( readFile( savePath ) == "first\nsecond\n" );
+            }
+        }
+    }
+
+    GIVEN( "a capture into a device, not a file of its own" )
+    {
+        QBuffer file;
+        file.open( QIODevice::WriteOnly );
+        CaptureLog log( false );
+        log.start( &file );
+        REQUIRE( log.receive( "first\n" ) );
+
+        WHEN( "it is rotated" )
+        {
+            QString error;
+            const auto newPath = log.rotate( PartialLine::WriteOut, error );
+
+            THEN( "nothing moves" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( log.rotationCount() == 0 );
+                REQUIRE( log.receive( "second\n" ) );
+                REQUIRE( file.data() == "first\nsecond\n" );
+            }
+        }
+    }
+}
+
+SCENARIO( "a rotation that cannot create the new file", "[capturelog][rotation]" )
+{
+    if ( !ReadOnlyDir::isEnforced() ) {
+        WARN( "File permissions are not enforced (running as root?); skipped." );
+        return;
+    }
+
+    GIVEN( "a capture whose log directory no longer accepts new files" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        FileCapture capture( savePath );
+        REQUIRE( capture.opened );
+        REQUIRE( capture.log.receive( "first\n" ) );
+        QString error;
+
+        WHEN( "it is rotated" )
+        {
+            QString newPath;
+            {
+                const ReadOnlyDir readOnly( logDir.path() );
+                newPath = capture.log.rotate( PartialLine::WriteOut, error );
+            }
+
+            THEN( "it says so, and the capture goes on in the old file" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( error.contains( "Could not rotate the log" ) );
+                REQUIRE( error.contains( "still writing to " + savePath ) );
+                REQUIRE( capture.log.isOpen() );
+                REQUIRE( capture.log.path() == savePath );
+                REQUIRE( capture.log.rotationCount() == 0 );
+            }
+
+            THEN( "later lines reach the old file, and its counters go on" )
+            {
+                REQUIRE( capture.log.receive( "after\n" ) );
+                REQUIRE( readFile( savePath ) == "first\nafter\n" );
+                REQUIRE( capture.log.lineCount() == 2 );
+                REQUIRE( capture.log.fileSize() == 12 );
+            }
+        }
+
+        WHEN( "it is rotated, and the old file cannot be reopened either" )
+        {
+            QString newPath;
+            {
+                QFile::setPermissions( savePath, QFileDevice::ReadOwner );
+                const ReadOnlyDir readOnly( logDir.path() );
+                newPath = capture.log.rotate( PartialLine::WriteOut, error );
+            }
+
+            THEN( "it says so, and the capture has ended instead of going on without a file" )
+            {
+                REQUIRE( newPath.isEmpty() );
+                REQUIRE( error.contains( "nor reopen " + savePath ) );
+                REQUIRE( error.contains( "capture stopped" ) );
+                REQUIRE_FALSE( capture.log.isOpen() );
+            }
+
+            THEN( "what was written before is kept" )
+            {
+                REQUIRE( readFile( savePath ) == "first\n" );
+            }
+        }
+    }
+}
+
+SCENARIO( "a file that reaches the size limit asks to be rotated", "[capturelog][sizelimit]" )
+{
+    GIVEN( "a capture whose file may hold 16 bytes" )
+    {
+        FileCapture capture( {}, 16 );
+        REQUIRE( capture.opened );
+        const auto& requests = capture.requests;
+        QString error;
+
+        THEN( "a rotation is due at the limit" )
+        {
+            REQUIRE( capture.log.nextRotationSize() == 16 );
+        }
+
+        WHEN( "the file stays below it" )
+        {
+            REQUIRE( capture.log.receive( "0123456789\n" ) );
+
+            THEN( "no rotation is asked for" )
+            {
+                REQUIRE( requests.isEmpty() );
+                REQUIRE_FALSE( capture.log.hasReachedSizeLimit() );
+            }
+        }
+
+        WHEN( "one read reaches it, with a line after the one that does" )
+        {
+            REQUIRE( capture.log.receive( "0123456789\nabcdefghij\nmore\n" ) );
+
+            THEN( "a rotation is asked for once, after the line that reached it" )
+            {
+                REQUIRE( requests == QList<qint64>{ 22 } );
+                REQUIRE( capture.log.hasReachedSizeLimit() );
+            }
+
+            THEN( "the next request is due the limit past the end of that line" )
+            {
+                REQUIRE( capture.log.nextRotationSize() == 22 + 16 );
+            }
+
+            AND_WHEN( "the file grows on, by less than the limit, while nobody rotates it" )
+            {
+                REQUIRE( capture.log.receive( "more\n" ) );
+
+                THEN( "it is not asked for again" )
+                {
+                    REQUIRE( requests.size() == 1 );
+                }
+            }
+
+            AND_WHEN( "it is rotated in the middle of a line" )
+            {
+                REQUIRE( capture.log.receive( "par" ) );
+                const auto newPath = capture.log.rotate( PartialLine::Keep, error );
+                REQUIRE( capture.log.receive( "tial\n" ) );
+
+                THEN( "the new file starts below the limit, and is due at it" )
+                {
+                    REQUIRE( readFile( newPath ) == "partial\n" );
+                    REQUIRE_FALSE( capture.log.hasReachedSizeLimit() );
+                    REQUIRE( capture.log.nextRotationSize() == 16 );
+                }
+
+                AND_WHEN( "the new file reaches it" )
+                {
+                    REQUIRE( capture.log.receive( "0123456789\n" ) );
+
+                    THEN( "a rotation is asked for again" )
+                    {
+                        REQUIRE( requests == QList<qint64>{ 22, 19 } );
+                    }
+                }
+            }
+        }
+
+        WHEN( "one read grows the file by twice the limit, line after line" )
+        {
+            REQUIRE( capture.log.receive( "0123456789\nabcdefghij\n0123456789\nabcdefghij\n" ) );
+
+            THEN( "a rotation is asked for at each line that passed the next due size" )
+            {
+                REQUIRE( requests == QList<qint64>{ 22, 44 } );
+                REQUIRE( capture.log.nextRotationSize() == 44 + 16 );
+            }
+        }
+
+        WHEN( "a command sent reaches it" )
+        {
+            REQUIRE( capture.log.send( "a command longer than the limit" ) );
+
+            THEN( "a rotation is asked for" )
+            {
+                REQUIRE( requests == QList<qint64>{ 37 } );
+            }
+        }
+    }
+
+    GIVEN( "a capture at the limit whose rotation fails" )
+    {
+        if ( !ReadOnlyDir::isEnforced() ) {
+            WARN( "File permissions are not enforced (running as root?); skipped." );
+            return;
+        }
+
+        QTemporaryDir logDir;
+        FileCapture capture( logDir.filePath( "capture.log" ), 16 );
+        REQUIRE( capture.opened );
+        const auto& requests = capture.requests;
+        REQUIRE( capture.log.receive( "0123456789\nabcdefghij\n" ) );
+        REQUIRE( requests.size() == 1 );
+        QString error;
+        {
+            const ReadOnlyDir readOnly( logDir.path() );
+            REQUIRE( capture.log.rotate( PartialLine::Keep, error ).isEmpty() );
+        }
+
+        THEN( "the next request is due once the file has grown by the limit again" )
+        {
+            REQUIRE( capture.log.rotationCount() == 0 );
+            REQUIRE( capture.log.nextRotationSize() == capture.log.fileSize() + 16 );
+        }
+
+        WHEN( "the file grows by less than the limit again" )
+        {
+            REQUIRE( capture.log.receive( "short\n" ) );
+
+            THEN( "the failed rotation is not asked for on every line" )
+            {
+                REQUIRE( requests.size() == 1 );
+            }
+
+            AND_WHEN( "it has grown by the limit since the failed rotation" )
+            {
+                REQUIRE( capture.log.receive( "0123456789\n" ) );
+
+                THEN( "a rotation is asked for again" )
+                {
+                    REQUIRE( requests == QList<qint64>{ 22, 39 } );
+                    REQUIRE( capture.log.nextRotationSize() == 39 + 16 );
+                }
+            }
+        }
+    }
+
+    GIVEN( "a capture without a size limit" )
+    {
+        FileCapture capture( {}, 0 );
+        REQUIRE( capture.opened );
+        const auto& requests = capture.requests;
+
+        WHEN( "it writes a lot" )
+        {
+            REQUIRE( capture.log.receive( QByteArray( 900, 'x' ) + "\n" ) );
+
+            THEN( "no rotation is asked for, nor due" )
+            {
+                REQUIRE( requests.isEmpty() );
+                REQUIRE_FALSE( capture.log.hasReachedSizeLimit() );
+                REQUIRE( capture.log.nextRotationSize() == 0 );
+            }
+        }
+    }
+
+    GIVEN( "a save path that already holds more than the limit" )
+    {
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        writeFile( savePath, QByteArray( 64, 'x' ) + "\n" );
+        FileCapture capture( savePath, 16 );
+        REQUIRE( capture.opened );
+
+        WHEN( "the capture appends its first line" )
+        {
+            REQUIRE( capture.log.receive( "first\n" ) );
+
+            THEN( "a rotation is asked for" )
+            {
+                REQUIRE( capture.requests == QList<qint64>{ 71 } );
+            }
         }
     }
 }
