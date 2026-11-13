@@ -104,8 +104,10 @@ class SidebarWidget : public QWidget {
 
 public:
     /// Shows the configurations of @p profiles and the sessions of
-    /// @p sessions, which must both outlive it.
-    SidebarWidget( ProfileStore* profiles, Sessions* sessions, QWidget* parent = nullptr );
+    /// @p sessions, and tells the user through @p host; all three must
+    /// outlive it.
+    SidebarWidget( Host& host, ProfileStore* profiles, Sessions* sessions,
+                   QWidget* parent = nullptr );
 
     /// Show the configurations saved now.
     void reload();
@@ -156,6 +158,7 @@ private:
     /// rotated, and run the timer while some session runs.
     void updateTiles();
 
+    Host& host_;
     ProfileStore* profiles_;
     Sessions* sessions_;
     QPushButton* stopAll_;

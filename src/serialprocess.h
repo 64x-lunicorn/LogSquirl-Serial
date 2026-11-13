@@ -36,13 +36,15 @@
  *   SerialConfig cfg;
  *   cfg.portName = "/dev/ttyUSB0";
  *   cfg.baudRate = 115200;
- *   auto* proc = new SerialProcess( cfg, "/optional/save.log", parent );
+ *   auto* proc = new SerialProcess( host, cfg, "/optional/save.log", parent );
  *   if ( proc->start() )              // opens serial port
  *       qDebug() << proc->tempFilePath(); // LogSquirl opens this file
  *   proc->stop();                     // closes port
  */
 
 #pragma once
+
+#include "host.h"
 
 #include <QDateTime>
 #include <QFile>
@@ -111,13 +113,15 @@ public:
     /**
      * Construct a serial session.
      *
+     * @param host      What it logs to, and where its temporary directory
+     *                  goes (Host::tempRoot()); must outlive it.
      * @param config    Serial port configuration.
      * @param savePath  Optional path to a .log file for persistent saving.
      *                  Pass an empty string to disable saving.
      * @param parent    QObject parent for memory management.
      */
-    explicit SerialProcess( const SerialConfig& config, const QString& savePath = {},
-                            QObject* parent = nullptr );
+    SerialProcess( Host& host, const SerialConfig& config, const QString& savePath = {},
+                   QObject* parent = nullptr );
 
     /** Closes the port without emitting any signal. */
     ~SerialProcess() override;
@@ -431,6 +435,7 @@ private:
     /** Close the log file after a failed start; remove it if start() created it. */
     void discardLogFile();
 
+    Host& host_;
     SerialConfig config_;
     QString savePath_;
 

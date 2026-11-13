@@ -36,12 +36,13 @@
 
 #pragma once
 
+#include "host.h"
 #include "logsquirl_plugin_api.h"
 
 #include <QString>
 
 #include <cstddef>
-#include <exception>
+#include <utility>
 
 namespace serial_monitor {
 class PortDialog;
@@ -60,8 +61,11 @@ namespace serial_monitor {
  * is necessary.
  */
 struct PluginState {
-    const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
-    void* handle = nullptr;                 ///< Opaque plugin instance handle.
+    const LogSquirlHostApi* api = nullptr; ///< Host API function table.
+    void* handle = nullptr;                ///< Opaque plugin instance handle.
+    /// The Host the capture modules are handed: api and handle between
+    /// init() and shutdown(), detached (doing nothing) otherwise.
+    CApiHost host;
     Sessions* sessions = nullptr;           ///< The running captures, which the views show.
     ProfileStore* profiles = nullptr;       ///< serial.ini: defaults, configurations.
     PortDialog* dialog = nullptr;           ///< The dialog that edits a saved configuration.
@@ -73,39 +77,20 @@ struct PluginState {
     std::size_t hostApiSize = 0;
     bool initialised = false; ///< True between init() and shutdown().
     bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
-    QString tempRoot;      ///< Where temporary directories go; empty: the system's (for tests).
+    /// Where init() puts the temporary directories (host.tempRoot()); empty:
+    /// the system's.  Set by the tests, before init().
+    QString tempRoot;
 };
 
 /// The single global instance — defined in plugin.cpp.
 extern PluginState g_state;
 
-/// Log a message through the host API (no-op if not initialised).
-/// The host decodes the message as UTF-8.
-void hostLog( int level, const QString& message );
-
-/// Show a host notification (no-op if not initialised).
-/// The host decodes the message as UTF-8.
-void hostNotify( const QString& message );
-
-/// Log that work for the host (@p what) failed, for @p reason.
-void logFailure( const char* what, const char* reason ) noexcept;
-
-/// Run work for the host, logging instead of throwing: the host is C, and
-/// an exception escaping into it would terminate LogSquirl.  Entry points
-/// and every slot the host's event loop runs (a click in the sidebar or the
-/// dialog) go through it.  Returns false if it threw.
+/// guarded() through the plugin's host (g_state.host): entry points and the
+/// slots of the parts not handed a Host (the dialog) go through it.
 template <typename Work>
 bool guarded( const char* what, Work&& work ) noexcept
 {
-    try {
-        work();
-        return true;
-    } catch ( const std::exception& e ) {
-        logFailure( what, e.what() );
-    } catch ( ... ) {
-        logFailure( what, "unknown exception" );
-    }
-    return false;
+    return guarded( g_state.host, what, std::forward<Work>( work ) );
 }
 
 } // namespace serial_monitor

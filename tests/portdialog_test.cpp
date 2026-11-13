@@ -55,11 +55,12 @@ namespace {
 
 /// The dialog's and the sidebar's world: sessions, the store, both views.
 struct World {
-    explicit World( const FakeHost& host )
-        : profiles( host.configDir(),
+    explicit World( FakeHost& host )
+        : sessions( host )
+        , profiles( host.configDir(),
                     [ this ]( const QString& name ) { return !sessions.portOf( name ).isEmpty(); } )
         , dialog( &profiles, &sessions )
-        , sidebar( &profiles, &sessions )
+        , sidebar( host, &profiles, &sessions )
     {
     }
 
@@ -342,7 +343,7 @@ SCENARIO( "the dialog shares the sessions' port list", "[portdialog]" )
     GIVEN( "sessions that have scanned the ports" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         ProfileStore profiles( host.configDir() );
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
 
@@ -377,7 +378,7 @@ SCENARIO( "the empty log directory says where captures go", "[portdialog]" )
     GIVEN( "a host with a configuration directory" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         ProfileStore profiles( host.configDir() );
         PortDialog dialog( &profiles, &sessions );
         auto* logDir = child<QLineEdit>( dialog, "logDir" );
@@ -395,7 +396,7 @@ SCENARIO( "the empty log directory says where captures go", "[portdialog]" )
     {
         FakeHost host;
         host.hasConfigDir = false;
-        Sessions sessions;
+        Sessions sessions( host );
         ProfileStore profiles( {} );
         PortDialog dialog( &profiles, &sessions );
 

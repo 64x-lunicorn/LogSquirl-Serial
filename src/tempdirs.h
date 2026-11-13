@@ -26,6 +26,9 @@
  * instance find the directories of earlier instances in the same LogSquirl process (after the
  * plugin was disabled, updated and enabled again), and those of LogSquirl processes that ended
  * without removing theirs.
+ *
+ * The temporary root, the directory they are created in, is the Host's
+ * (Host::tempRoot()); every function here is given it.
  */
 
 #pragma once
@@ -33,9 +36,6 @@
 #include <QString>
 
 namespace serial_monitor {
-
-/// The directory the temporary directories are created in.
-QString tempRoot();
 
 /// The QTemporaryDir template for a new temporary directory of this process.
 QString tempDirTemplate( const QString& root );

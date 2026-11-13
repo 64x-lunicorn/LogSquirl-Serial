@@ -25,8 +25,8 @@
  *
  *   1. A SerialProcess is created with the given configuration.
  *   2. SerialProcess::start() opens the log file and the serial port.
- *   3. The host API's open_file() is called with the log file's path and
- *      follow=true, which opens a new tail-mode tab in LogSquirl.
+ *   3. Host::openFollowed() is called with the log file's path, which opens
+ *      a new tail-mode tab in LogSquirl.
  *   4. The session is stored in sessions_, and sessionStarted() emitted.
  *
  * Stopping one:
@@ -36,7 +36,6 @@
  */
 
 #include "sessions.h"
-#include "plugin.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -70,20 +69,20 @@ bool isSameFile( const QString& a, const QString& b )
            == 0;
 }
 
-/** Open @p path in a followed tab of the host. */
-void openInTab( const QString& path )
-{
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, path.toUtf8().constData(), 1 );
-    }
-}
-
 } // namespace
 
-Sessions::Sessions( QObject* parent )
+Sessions::Sessions( Host& host, QObject* parent )
     : QObject( parent )
-    , ports_( SerialProcess::discoverPorts() )
+    , host_( host )
+    , ports_( scanPorts() )
 {
+}
+
+QStringList Sessions::scanPorts()
+{
+    auto ports = SerialProcess::discoverPorts();
+    host_.log( LOGSQUIRL_LOG_INFO, QString( "Discovered %1 serial port(s)." ).arg( ports.size() ) );
+    return ports;
 }
 
 // ── Starting and stopping ───────────────────────────────────────────────
@@ -107,17 +106,14 @@ bool Sessions::startSession( const SerialConfig& config, const QString& savePath
                   : QString( "Serial capture not started for %1: the port is already being "
                              "captured by “%2”; stop it first." )
                         .arg( name, holder );
-        hostLog( LOGSQUIRL_LOG_WARNING, message );
-        hostNotify( message );
+        host_.warn( message );
         return false;
     }
 
     // The baud rate combo is editable, so its text may not be a rate.
     if ( config.baudRate <= 0 ) {
-        const auto message
-            = QString( "Serial capture not started for %1: invalid baud rate." ).arg( name );
-        hostLog( LOGSQUIRL_LOG_WARNING, message );
-        hostNotify( message );
+        host_.warn(
+            QString( "Serial capture not started for %1: invalid baud rate." ).arg( name ) );
         return false;
     }
 
@@ -125,29 +121,27 @@ bool Sessions::startSession( const SerialConfig& config, const QString& savePath
     // path that is not a full one is left to SerialProcess::start() to refuse.
     const auto absoluteSavePath = SerialProcess::absoluteUserPath( savePath );
     if ( !absoluteSavePath.isEmpty() && isFileInUse( absoluteSavePath ) ) {
-        const auto message = QString( "Serial capture not started for %1: another session is "
-                                      "already writing to %2." )
-                                 .arg( name, savePath );
-        hostLog( LOGSQUIRL_LOG_WARNING, message );
-        hostNotify( message );
+        host_.warn( QString( "Serial capture not started for %1: another session is "
+                             "already writing to %2." )
+                        .arg( name, savePath ) );
         return false;
     }
 
-    auto* proc = new SerialProcess( config, savePath, this );
+    auto* proc = new SerialProcess( host_, config, savePath, this );
 
     // What the session reports comes in the host's event loop: nothing may
     // throw into it.
     connect( proc, &SerialProcess::finished, this, [ this, name ] {
-        guarded( "ending a serial capture", [ this, &name ] { onSessionFinished( name ); } );
+        guarded( host_, "ending a serial capture", [ this, &name ] { onSessionFinished( name ); } );
     } );
 
     connect( proc, &SerialProcess::errorOccurred, this, [ this, name ]( const QString& msg ) {
-        guarded( "reporting a serial capture's error",
+        guarded( host_, "reporting a serial capture's error",
                  [ this, &name, &msg ] { onSessionError( name, msg ); } );
     } );
 
     connect( proc, &SerialProcess::sizeLimitReached, this, [ this, name ] {
-        guarded( "starting a new log file at a serial capture's size limit",
+        guarded( host_, "starting a new log file at a serial capture's size limit",
                  [ this, &name ] { onSizeLimitReached( name ); } );
     } );
 
@@ -162,8 +156,8 @@ bool Sessions::startSession( const SerialConfig& config, const QString& savePath
         owners_.insert( name, owner );
     }
 
-    openInTab( proc->tempFilePath() );
-    hostNotify(
+    host_.openFollowed( proc->tempFilePath() );
+    host_.notify(
         QString( "Serial capture started for %1 at %2 baud" ).arg( name ).arg( config.baudRate ) );
 
     Q_EMIT sessionStarted( name );
@@ -180,9 +174,9 @@ void Sessions::stopSession( const QString& portName )
     proc->stop();
     proc->preserveTempFile();
 
-    hostNotify( QString( "Serial capture stopped for %1 (%2 lines)" )
-                    .arg( portName )
-                    .arg( proc->lineCount() ) );
+    host_.notify( QString( "Serial capture stopped for %1 (%2 lines)" )
+                      .arg( portName )
+                      .arg( proc->lineCount() ) );
 
     proc->deleteLater();
     Q_EMIT sessionStopped( portName );
@@ -224,8 +218,8 @@ void Sessions::rotateLogOf( const QString& portName, SerialProcess::PartialLine 
     // must outlive this session (until LogSquirl quits, see tempdirs.h).
     proc->preserveTempFile();
 
-    openInTab( newPath );
-    hostNotify( notification );
+    host_.openFollowed( newPath );
+    host_.notify( notification );
 
     Q_EMIT sessionChanged( portName );
 }
@@ -277,7 +271,7 @@ QString Sessions::portOf( const QString& owner ) const
 
 void Sessions::refreshPorts()
 {
-    ports_ = SerialProcess::discoverPorts();
+    ports_ = scanPorts();
     Q_EMIT portsChanged();
 }
 
@@ -295,7 +289,7 @@ void Sessions::onSessionFinished( const QString& portName )
     proc->preserveTempFile();
     proc->deleteLater();
 
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
+    host_.log( LOGSQUIRL_LOG_INFO, QString( "Serial session for %1 ended." ).arg( portName ) );
     Q_EMIT sessionStopped( portName );
 
     // A session ends by itself when its device is unplugged; find out
@@ -318,9 +312,10 @@ void Sessions::onSizeLimitReached( const QString& portName )
 
 void Sessions::onSessionError( const QString& portName, const QString& message )
 {
-    hostLog( LOGSQUIRL_LOG_ERROR, portName + ": " + message );
-
-    hostNotify( "Serial error (" + portName + "): " + message );
+    // Not a warn(): the log names the port the way the other log lines do,
+    // the notification says what kind of message it is.
+    host_.log( LOGSQUIRL_LOG_ERROR, portName + ": " + message );
+    host_.notify( "Serial error (" + portName + "): " + message );
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────

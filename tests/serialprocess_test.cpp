@@ -84,7 +84,8 @@ SCENARIO( "SerialProcess construction and properties", "[serialprocess]" )
         cfg.portName = "/dev/ttyUSB0";
         cfg.baudRate = 115200;
 
-        SerialProcess proc( cfg );
+        FakeHost host;
+        SerialProcess proc( host, cfg );
 
         THEN( "the port name matches the constructor argument" )
         {
@@ -146,13 +147,68 @@ SCENARIO( "a configuration has sensible defaults", "[serialprocess]" )
     }
 }
 
+SCENARIO( "a session that fails to start leaves the telling to its owner", "[serialprocess]" )
+{
+    GIVEN( "a SerialProcess for a port that does not exist" )
+    {
+        FakeHost host;
+        SerialProcess proc( host, configFor( kMissingPort ) );
+
+        WHEN( "it fails to start" )
+        {
+            REQUIRE_FALSE( proc.start() );
+
+            THEN( "it neither logs nor notifies on the host: it emitted the error" )
+            {
+                REQUIRE( host.logs.isEmpty() );
+                REQUIRE( host.notifications.isEmpty() );
+            }
+        }
+    }
+}
+
+#ifdef Q_OS_UNIX
+SCENARIO( "a session logs to the host it is handed, and writes below its temporary root",
+          "[serialprocess]" )
+{
+    GIVEN( "a SerialProcess on a device, without a save path" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        SerialProcess proc( host, configFor( device.devicePath() ) );
+
+        WHEN( "it starts and stops" )
+        {
+            REQUIRE( proc.start() );
+            const auto path = proc.tempFilePath();
+            proc.stop();
+
+            THEN( "its log file is below the host's temporary root" )
+            {
+                const auto root = QFileInfo( host.tempRoot() ).canonicalFilePath();
+                REQUIRE_FALSE( root.isEmpty() );
+                REQUIRE( QFileInfo( path ).canonicalFilePath().startsWith( root + "/" ) );
+            }
+
+            THEN( "the host's log says the port was opened and closed; nothing is notified" )
+            {
+                REQUIRE( host.logs.filter( "Opened " + device.devicePath() ).size() == 1 );
+                REQUIRE( host.logs.filter( "Closed " + device.devicePath() ).size() == 1 );
+                REQUIRE( host.notifications.isEmpty() );
+            }
+        }
+    }
+}
+#endif
+
 SCENARIO( "rotateLog does nothing while no session runs", "[serialprocess]" )
 {
     GIVEN( "a SerialProcess that has not been started" )
     {
+        FakeHost host;
         SerialConfig cfg;
         cfg.portName = "/dev/ttyUSB0";
-        SerialProcess proc( cfg );
+        SerialProcess proc( host, cfg );
 
         WHEN( "rotateLog is called" )
         {
@@ -176,7 +232,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         const auto savePath = logDir.filePath( "capture.log" );
 
         QStringList errors;
-        SerialProcess proc( configFor( kMissingPort ), savePath );
+        SerialProcess proc( host, configFor( kMissingPort ), savePath );
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
 
@@ -214,7 +270,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
             existing.write( "earlier capture\n" );
         }
 
-        SerialProcess proc( configFor( kMissingPort ), savePath );
+        SerialProcess proc( host, configFor( kMissingPort ), savePath );
 
         WHEN( "starting the session fails" )
         {
@@ -233,7 +289,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
 
-        SerialProcess proc( configFor( device.devicePath() ) );
+        SerialProcess proc( host, configFor( device.devicePath() ) );
 
         WHEN( "starting the session" )
         {
@@ -255,7 +311,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
 
-        SerialProcess proc( configFor( device.devicePath() ) );
+        SerialProcess proc( host, configFor( device.devicePath() ) );
 
         WHEN( "it sends them before its first line of text" )
         {
@@ -276,7 +332,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
 
-        SerialProcess proc( configFor( device.devicePath() ) );
+        SerialProcess proc( host, configFor( device.devicePath() ) );
         REQUIRE( proc.start() );
         // Sent with a complete line, so the session has read the part once
         // it has written that line.
@@ -301,7 +357,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
 
-        SerialProcess proc( configFor( device.devicePath() ) );
+        SerialProcess proc( host, configFor( device.devicePath() ) );
         REQUIRE( proc.start() );
         REQUIRE( device.send( "boot\n25 \xC2" ) ); // the first byte of a degree sign
         REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 1; } ) );
@@ -327,7 +383,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
 
-        SerialProcess proc( configFor( device.devicePath() ) );
+        SerialProcess proc( host, configFor( device.devicePath() ) );
 
         WHEN( "it sends a line and then goes quiet" )
         {
@@ -366,7 +422,7 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
             existing.write( "earlier capture\n" );
         }
 
-        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
 
         WHEN( "the session runs" )
         {
@@ -390,13 +446,13 @@ SCENARIO( "start reports whether the port could be opened", "[serialprocess]" )
 
         WHEN( "a session is stopped and a new one started with the same path" )
         {
-            SerialProcess first( configFor( device.devicePath() ), savePath );
+            SerialProcess first( host, configFor( device.devicePath() ), savePath );
             REQUIRE( first.start() );
             REQUIRE( device.send( "one\n" ) );
             REQUIRE( waitFor( [ &first ]() { return first.lineCount() == 1; } ) );
             first.stop();
 
-            SerialProcess second( configFor( device.devicePath() ), savePath );
+            SerialProcess second( host, configFor( device.devicePath() ), savePath );
             REQUIRE( second.start() );
             REQUIRE( device.send( "two\n" ) );
             REQUIRE( waitFor( [ &second ]() { return second.lineCount() == 1; } ) );
@@ -415,7 +471,8 @@ SCENARIO( "a session that has not started has counted nothing", "[serialprocess]
 {
     GIVEN( "a SerialProcess that has not been started" )
     {
-        SerialProcess proc( configFor( kMissingPort ) );
+        FakeHost host;
+        SerialProcess proc( host, configFor( kMissingPort ) );
 
         THEN( "its counters are zero and it has no start time" )
         {
@@ -438,7 +495,7 @@ SCENARIO( "a session's counters follow what it captured", "[serialprocess][count
         serial_test::PseudoTerminal device;
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 1000;
-        SerialProcess proc( cfg );
+        SerialProcess proc( host, cfg );
         const auto beforeStart = QDateTime::currentDateTime();
         REQUIRE( proc.start() );
         const auto afterStart = QDateTime::currentDateTime();
@@ -497,7 +554,7 @@ SCENARIO( "a session's counters follow what it captured", "[serialprocess][count
             REQUIRE( earlier.open( QIODevice::WriteOnly ) );
             earlier.write( "earlier\n" );
         }
-        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
         REQUIRE( proc.start() );
 
         WHEN( "the capture appends a line" )
@@ -519,7 +576,7 @@ SCENARIO( "a session's counters follow what it captured", "[serialprocess][count
         serial_test::PseudoTerminal device;
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 0;
-        SerialProcess proc( cfg );
+        SerialProcess proc( host, cfg );
         REQUIRE( proc.start() );
 
         THEN( "no rotation is due" )
@@ -540,7 +597,7 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
         QTemporaryDir logDir;
         const auto savePath = SerialProcess::generateLogPath( logDir.path(), device.devicePath() );
 
-        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
         REQUIRE( proc.start() );
         REQUIRE( device.send( "first\nsecond\n" ) );
         REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
@@ -569,7 +626,7 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
         FakeHost host;
         serial_test::PseudoTerminal device;
 
-        SerialProcess proc( configFor( device.devicePath() ) );
+        SerialProcess proc( host, configFor( device.devicePath() ) );
         REQUIRE( proc.start() );
         REQUIRE( device.send( "first\nsecond\n" ) );
         REQUIRE( waitFor( [ &proc ]() { return proc.lineCount() == 2; } ) );
@@ -605,7 +662,7 @@ SCENARIO( "rotateLog moves the capture to a new file", "[serialprocess]" )
         const auto savePath = logDir.filePath( "capture.log" );
 
         QStringList errors;
-        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
         REQUIRE( proc.start() );
@@ -669,7 +726,7 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
         serial_test::PseudoTerminal device;
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
-        SerialProcess proc( cfg );
+        SerialProcess proc( host, cfg );
         int requests = 0;
         QObject::connect( &proc, &SerialProcess::sizeLimitReached,
                           [ &requests ]() { ++requests; } );
@@ -752,7 +809,7 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
         QTemporaryDir logDir;
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
-        SerialProcess proc( cfg, logDir.filePath( "capture.log" ) );
+        SerialProcess proc( host, cfg, logDir.filePath( "capture.log" ) );
         int requests = 0;
         QObject::connect( &proc, &SerialProcess::sizeLimitReached, [ & ]() {
             ++requests;
@@ -798,7 +855,7 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
         serial_test::PseudoTerminal device;
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 0;
-        SerialProcess proc( cfg );
+        SerialProcess proc( host, cfg );
         int requests = 0;
         QObject::connect( &proc, &SerialProcess::sizeLimitReached,
                           [ &requests ]() { ++requests; } );
@@ -830,7 +887,7 @@ SCENARIO( "a log file that reaches its size limit asks to be rotated", "[serialp
         }
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
-        SerialProcess proc( cfg, savePath );
+        SerialProcess proc( host, cfg, savePath );
         int requests = 0;
         QObject::connect( &proc, &SerialProcess::sizeLimitReached,
                           [ &requests ]() { ++requests; } );
@@ -857,7 +914,7 @@ SCENARIO( "destroying a running session does not call back its owner", "[serialp
         FakeHost host;
         serial_test::PseudoTerminal device;
         int signalCount = 0;
-        auto* proc = new SerialProcess( configFor( device.devicePath() ) );
+        auto* proc = new SerialProcess( host, configFor( device.devicePath() ) );
         QObject::connect( proc, &SerialProcess::finished, [ &signalCount ]() { ++signalCount; } );
         QObject::connect( proc, &SerialProcess::errorOccurred,
                           [ &signalCount ]( const QString& ) { ++signalCount; } );
@@ -885,7 +942,7 @@ SCENARIO( "a log file that cannot be written stops the session and says why", "[
         serial_test::PseudoTerminal device;
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
-        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
         QStringList errors;
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
@@ -952,7 +1009,7 @@ SCENARIO( "a typed path is made absolute, and a relative one refused", "[serialp
     GIVEN( "a session with a relative save path" )
     {
         FakeHost host;
-        SerialProcess proc( configFor( kMissingPort ), "relative-capture.log" );
+        SerialProcess proc( host, configFor( kMissingPort ), "relative-capture.log" );
         QStringList errors;
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
@@ -983,7 +1040,7 @@ SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
         QTemporaryDir logDir;
         const auto fifo = logDir.filePath( "capture.log" );
         REQUIRE( ::mkfifo( QFile::encodeName( fifo ).constData(), 0600 ) == 0 );
-        SerialProcess proc( configFor( device.devicePath() ), fifo );
+        SerialProcess proc( host, configFor( device.devicePath() ), fifo );
         QStringList errors;
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
@@ -1009,7 +1066,7 @@ SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        SerialProcess proc( configFor( device.devicePath() ), "/dev/null" );
+        SerialProcess proc( host, configFor( device.devicePath() ), "/dev/null" );
         QStringList errors;
         QObject::connect( &proc, &SerialProcess::errorOccurred,
                           [ &errors ]( const QString& message ) { errors << message; } );
@@ -1035,7 +1092,7 @@ SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
         const auto target = logDir.filePath( "elsewhere.log" );
         const auto link = logDir.filePath( "capture.log" );
         REQUIRE( QFile::link( target, link ) );
-        SerialProcess proc( configFor( device.devicePath() ), link );
+        SerialProcess proc( host, configFor( device.devicePath() ), link );
 
         WHEN( "it is started" )
         {
@@ -1062,7 +1119,7 @@ SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
         }
         const auto link = logDir.filePath( "capture.log" );
         REQUIRE( QFile::link( target, link ) );
-        SerialProcess proc( configFor( device.devicePath() ), link );
+        SerialProcess proc( host, configFor( device.devicePath() ), link );
 
         WHEN( "it is started" )
         {
@@ -1083,7 +1140,7 @@ SCENARIO( "only a regular file is opened as the save path", "[serialprocess]" )
         serial_test::PseudoTerminal device;
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
-        SerialProcess proc( configFor( device.devicePath() ), savePath );
+        SerialProcess proc( host, configFor( device.devicePath() ), savePath );
 
         WHEN( "it is started" )
         {

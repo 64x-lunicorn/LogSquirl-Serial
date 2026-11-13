@@ -351,6 +351,8 @@ logsquirl-serial/
 ├── src/
 │   ├── plugin.h                # Global state shared across translation units
 │   ├── plugin.cpp              # C ABI entry points (get_info, init, shutdown)
+│   ├── host.h                  # Host: what the captures need of LogSquirl; its C ABI adapter
+│   ├── host.cpp
 │   ├── serialprocess.h         # Serial port discovery + per-port session wrapper
 │   ├── serialprocess.cpp
 │   ├── sessions.h              # Session management (start/stop/rotate), port list

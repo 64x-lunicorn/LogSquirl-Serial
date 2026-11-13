@@ -308,10 +308,16 @@ or deletes one (`ProfileStore::changed`), from the dialog or from a tile.
   `editRequested(name)` and `newConfigurationRequested()`, which the plugin
   connects to the dialog.
 - Every slot the host's event loop runs goes through `guarded()`
-  ([`src/plugin.h`](../src/plugin.h)): the tiles' buttons, the timer, and
+  ([`src/host.h`](../src/host.h)): the tiles' buttons, the timer, and
   `Sessions`' handlers of what a `SerialProcess` reports (`finished`,
   `errorOccurred`, `sizeLimitReached`), which write files and rescan the
   ports. An exception there is logged; it would end LogSquirl.
+- `Sessions`, `SerialProcess` and the sidebar reach LogSquirl only through
+  the `Host` they are handed ([`src/host.h`](../src/host.h)): log, notify,
+  `warn()` (log and notify the same text, for a refusal), open a followed
+  tab, the configuration directory and the temporary root. The plugin hands
+  them `CApiHost`, the adapter over the host's C table; the tests hand them a
+  `FakeHost` (`tests/fakehost.h`), which records every call.
 
 ### Serial Port Discovery
 
@@ -446,6 +452,8 @@ UndefinedBehaviorSanitizer, without leak detection (`"sanitizers": true` in
 | `[counters]` | A session's counters, against a pseudo-terminal, and a running tile showing them |
 | `[sessions]` | Session bookkeeping in `Sessions`, a session's owner, a busy port |
 | `[signals]` | `Sessions`' signals, and the views that follow them |
+| `[hostapi]` | `CApiHost`, the `Host` of the C ABI, `warn()` and `guarded()` |
+| `[host]` | What `Sessions` logs and notifies on the `Host` it is handed, once each |
 | `[profiles]` | `serial.ini` and its store: the defaults, the saved configurations, the log directory, a file of 0.6.0, against a temporary directory without a host |
 | `[tile]` | The tile on its own: states, buttons, controls, colours |
 | `[portdialog]` | The dialog: save, edit, delete, what it refuses |

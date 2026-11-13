@@ -33,7 +33,8 @@
  * the session of its saved configuration (profiles.h), named as the
  * session's owner, and finds it again through portOf().  The views call
  * its methods and update on its signals.  Starting,
- * stopping and errors are host notifications, sent from here; stopAll()
+ * stopping and errors are notifications of the Host it is handed (host.h),
+ * sent from here; a refusal is a Host::warn(), logged and notified; stopAll()
  * notifies nothing (the views say "All serial sessions stopped.", the
  * shutdown says nothing).
  *
@@ -63,8 +64,12 @@ class Sessions : public QObject {
     Q_OBJECT
 
 public:
-    /** Scans the ports once (ports()), without emitting portsChanged(). */
-    explicit Sessions( QObject* parent = nullptr );
+    /**
+     * Scans the ports once (ports()), without emitting portsChanged().
+     * Everything it and its sessions tell LogSquirl goes through @p host,
+     * which must outlive it.
+     */
+    explicit Sessions( Host& host, QObject* parent = nullptr );
     ~Sessions() override = default;
 
     /**
@@ -201,6 +206,10 @@ private:
     /** Whether an active session writes to the file at @p path. */
     bool isFileInUse( const QString& path ) const;
 
+    /** Scan the ports, and log how many there are. */
+    QStringList scanPorts();
+
+    Host& host_;
     QStringList ports_; ///< Result of the last port scan.
     QMap<QString, SerialProcess*> sessions_;
     QMap<QString, QString> owners_; ///< Port → the configuration that started its session.

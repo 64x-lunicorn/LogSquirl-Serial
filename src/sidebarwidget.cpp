@@ -25,7 +25,7 @@
 #include "sidebarwidget.h"
 
 #include "connectiontile.h"
-#include "plugin.h"
+#include "host.h"
 #include "profiles.h"
 #include "sessions.h"
 
@@ -106,8 +106,10 @@ QStringList detailsOf( const SerialProcess& session, qint64 linesPerSecond )
 
 } // namespace
 
-SidebarWidget::SidebarWidget( ProfileStore* profiles, Sessions* sessions, QWidget* parent )
+SidebarWidget::SidebarWidget( Host& host, ProfileStore* profiles, Sessions* sessions,
+                              QWidget* parent )
     : QWidget( parent )
+    , host_( host )
     , profiles_( profiles )
     , sessions_( sessions )
     , stopAll_( new QPushButton( QStringLiteral( "■ Stop all" ), this ) )
@@ -154,20 +156,23 @@ SidebarWidget::SidebarWidget( ProfileStore* profiles, Sessions* sessions, QWidge
              &SidebarWidget::newConfigurationRequested );
     // Every slot runs in the host's event loop: nothing may throw into it.
     connect( stopAll_, &QPushButton::clicked, this, [ this ] {
-        guarded( "stopping every serial capture", [ this ] {
+        guarded( host_, "stopping every serial capture", [ this ] {
             sessions_->stopAll();
-            hostNotify( QStringLiteral( "All serial sessions stopped." ) );
+            host_.notify( QStringLiteral( "All serial sessions stopped." ) );
         } );
     } );
-    const auto follow
-        = [ this ] { guarded( "showing the serial captures", [ this ] { updateTiles(); } ); };
+    const auto follow = [ this ] {
+        guarded( host_, "showing the serial captures", [ this ] { updateTiles(); } );
+    };
     connect( sessions_, &Sessions::sessionStarted, this, follow );
     connect( sessions_, &Sessions::sessionStopped, this, follow );
     connect( sessions_, &Sessions::sessionChanged, this, follow ); // rotated
-    connect( profiles_, &ProfileStore::changed, this,
-             [ this ] { guarded( "showing the serial configurations", [ this ] { reload(); } ); } );
-    connect( timer_, &QTimer::timeout, this,
-             [ this ] { guarded( "counting the serial captures", [ this ] { refresh(); } ); } );
+    connect( profiles_, &ProfileStore::changed, this, [ this ] {
+        guarded( host_, "showing the serial configurations", [ this ] { reload(); } );
+    } );
+    connect( timer_, &QTimer::timeout, this, [ this ] {
+        guarded( host_, "counting the serial captures", [ this ] { refresh(); } );
+    } );
     timer_->setInterval( kRefreshMs );
 
     reload();
@@ -248,7 +253,7 @@ QWidget* SidebarWidget::controlsFor( const QString& name )
     layout->addLayout( optionsRow );
 
     const auto sendCommand = [ this, name, command, lineEnding ] {
-        guarded( "sending to a serial port", [ this, &name, command, lineEnding ] {
+        guarded( host_, "sending to a serial port", [ this, &name, command, lineEnding ] {
             sendFrom( name, command,
                       static_cast<TxLineEnding>( lineEnding->currentData().toInt() ) );
         } );
@@ -256,14 +261,14 @@ QWidget* SidebarWidget::controlsFor( const QString& name )
     connect( send, &QPushButton::clicked, this, sendCommand );
     connect( command, &QLineEdit::returnPressed, this, sendCommand );
     connect( lineEnding, &QComboBox::currentIndexChanged, this, [ this, name, lineEnding ] {
-        guarded( "choosing a line ending", [ this, &name, lineEnding ] {
+        guarded( host_, "choosing a line ending", [ this, &name, lineEnding ] {
             lineEndingByName_.insert(
                 name, static_cast<TxLineEnding>( lineEnding->currentData().toInt() ) );
         } );
     } );
     // Typed, sent (emptied) or cleared: what a rebuilt tile shows again.
     connect( command, &QLineEdit::textChanged, this, [ this, name ]( const QString& text ) {
-        guarded( "typing a serial command", [ this, &name, &text ] {
+        guarded( host_, "typing a serial command", [ this, &name, &text ] {
             if ( text.isEmpty() ) {
                 commandByName_.remove( name );
             }
@@ -273,7 +278,7 @@ QWidget* SidebarWidget::controlsFor( const QString& name )
         } );
     } );
     connect( rotateButton, &QPushButton::clicked, this, [ this, name ] {
-        guarded( "rotating a serial capture's log", [ this, &name ] { rotate( name ); } );
+        guarded( host_, "rotating a serial capture's log", [ this, &name ] { rotate( name ); } );
     } );
     return controls;
 }
@@ -327,17 +332,17 @@ void SidebarWidget::reload()
         const auto name = profile.name;
         tile->setControls( controlsFor( name ) );
         connect( tile, &ConnectionTile::startClicked, this, [ this, name ] {
-            guarded( "starting a serial capture", [ this, &name ] { start( name ); } );
+            guarded( host_, "starting a serial capture", [ this, &name ] { start( name ); } );
         } );
         connect( tile, &ConnectionTile::stopClicked, this, [ this, name ] {
-            guarded( "stopping a serial capture", [ this, &name ] { stop( name ); } );
+            guarded( host_, "stopping a serial capture", [ this, &name ] { stop( name ); } );
         } );
         connect( tile, &ConnectionTile::editClicked, this, [ this, name ] {
-            guarded( "editing a serial configuration",
+            guarded( host_, "editing a serial configuration",
                      [ this, &name ] { Q_EMIT editRequested( name ); } );
         } );
         connect( tile, &ConnectionTile::deleteClicked, this, [ this, name ] {
-            guarded( "deleting a serial configuration",
+            guarded( host_, "deleting a serial configuration",
                      [ this, &name ] { confirmDelete( name ); } );
         } );
         tiles_->addWidget( tile );
@@ -356,10 +361,7 @@ void SidebarWidget::start( const QString& name )
         return;
     }
     if ( const auto problem = startProblem( *profile ); !problem.isEmpty() ) {
-        const auto message
-            = QStringLiteral( "Serial capture %1 not started: %2" ).arg( name, problem );
-        hostLog( LOGSQUIRL_LOG_WARNING, message );
-        hostNotify( message );
+        host_.warn( QStringLiteral( "Serial capture %1 not started: %2" ).arg( name, problem ) );
         return;
     }
     // Refused with a notification when the port is captured already, or

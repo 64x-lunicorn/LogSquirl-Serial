@@ -169,9 +169,9 @@ SCENARIO( "the tab shows one tile per saved configuration", "[sidebarwidget]" )
     GIVEN( "a sidebar without saved configurations" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
 
         THEN( "it says how to add one" )
@@ -237,14 +237,14 @@ SCENARIO( "the tab shows one tile per saved configuration", "[sidebarwidget]" )
     GIVEN( "configurations saved before the sidebar was created, as after a restart" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         REQUIRE( profiles.store.upsert( profileFor( "board", "/dev/ttyUSB0" ) ).isEmpty() );
         REQUIRE( profiles.store.upsert( profileFor( "console", "/dev/ttyUSB1" ) ).isEmpty() );
 
         WHEN( "the sidebar is created" )
         {
-            SidebarWidget sidebar( &profiles.store, &sessions );
+            SidebarWidget sidebar( host, &profiles.store, &sessions );
 
             THEN( "it shows a tile for each, in the order they were saved" )
             {
@@ -262,10 +262,10 @@ SCENARIO( "a tile's Delete deletes its configuration once confirmed", "[sidebarw
     GIVEN( "a tile" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         REQUIRE( profiles.store.upsert( profileFor( "board", "/dev/ttyUSB0" ) ).isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
 
         WHEN( "its Delete is clicked and confirmed" )
         {
@@ -298,10 +298,10 @@ SCENARIO( "a tile asks the plugin to open the dialog", "[sidebarwidget]" )
     GIVEN( "a sidebar with a tile" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         REQUIRE( profiles.store.upsert( profileFor( "board", "/dev/ttyUSB0" ) ).isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         int newRequests = 0;
         QStringList edits;
         QObject::connect( &sidebar, &SidebarWidget::newConfigurationRequested,
@@ -341,11 +341,13 @@ SCENARIO( "a configuration that cannot start says why", "[sidebarwidget]" )
     GIVEN( "a tile whose configuration has no port" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         REQUIRE( profiles.store.upsert( profileFor( "board", {} ) ).isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         host.notifications.clear();
+        host.logs.clear();
+        host.logLevels.clear();
 
         WHEN( "its Start is clicked" )
         {
@@ -357,19 +359,25 @@ SCENARIO( "a configuration that cannot start says why", "[sidebarwidget]" )
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "port" ) );
             }
+
+            THEN( "the host it was handed logs it once, as a warning, in the same words" )
+            {
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
         }
     }
 
     GIVEN( "a tile whose port does not exist" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store
                      .upsert( profileFor( "board", "logsquirl-test-no-such-port", logDir.path() ) )
                      .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         host.notifications.clear();
 
         WHEN( "its Start is clicked" )
@@ -392,10 +400,10 @@ SCENARIO( "the sidebar does not poll while nothing captures", "[sidebarwidget][s
     GIVEN( "a sidebar with a stopped tile" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         REQUIRE( profiles.store.upsert( profileFor( "board", "/dev/ttyUSB0" ) ).isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
 
         THEN( "no timer runs: it updates on the sessions' signals" )
         {
@@ -419,12 +427,12 @@ SCENARIO( "a tile starts and stops a capture of its port", "[sidebarwidget]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
                      .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
 
         WHEN( "its Start is clicked" )
@@ -508,7 +516,7 @@ SCENARIO( "tiles on different ports capture at the same time", "[sidebarwidget]"
         FakeHost host;
         serial_test::PseudoTerminal first;
         serial_test::PseudoTerminal second;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", first.devicePath(), logDir.path() ) )
@@ -516,7 +524,7 @@ SCENARIO( "tiles on different ports capture at the same time", "[sidebarwidget]"
         REQUIRE(
             profiles.store.upsert( profileFor( "console", second.devicePath(), logDir.path() ) )
                 .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
 
         WHEN( "both are started" )
@@ -569,7 +577,7 @@ SCENARIO( "a second tile on a busy port is refused with a message", "[sidebarwid
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
@@ -577,7 +585,7 @@ SCENARIO( "a second tile on a busy port is refused with a message", "[sidebarwid
         REQUIRE(
             profiles.store.upsert( profileFor( "console", device.devicePath(), logDir.path() ) )
                 .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         click( sidebar.tile( "board" ), "startStop" );
         REQUIRE( sessions.portOf( "board" ) == device.devicePath() );
         host.notifications.clear();
@@ -627,12 +635,12 @@ SCENARIO( "a tile follows a capture that ends on its own", "[sidebarwidget][sign
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
                      .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         click( sidebar.tile( "board" ), "startStop" );
         REQUIRE( stateOf( sidebar.tile( "board" ) ) == "running" );
 
@@ -662,12 +670,12 @@ SCENARIO( "a running tile shows its session's counters", "[sidebarwidget][counte
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
                      .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
         QElapsedTimer sinceStart;
         sinceStart.start();
@@ -776,12 +784,12 @@ SCENARIO( "a running tile rotates its capture's log", "[sidebarwidget]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
                      .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
         click( sidebar.tile( "board" ), "startStop" );
         REQUIRE( device.send( "before\n" ) );
@@ -830,12 +838,12 @@ SCENARIO( "a running tile sends a command to its port", "[sidebarwidget]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         Store profiles( host, sessions );
         QTemporaryDir logDir;
         REQUIRE( profiles.store.upsert( profileFor( "board", device.devicePath(), logDir.path() ) )
                      .isEmpty() );
-        SidebarWidget sidebar( &profiles.store, &sessions );
+        SidebarWidget sidebar( host, &profiles.store, &sessions );
         sidebar.show();
         click( sidebar.tile( "board" ), "startStop" );
         REQUIRE( sessions.portOf( "board" ) == device.devicePath() );

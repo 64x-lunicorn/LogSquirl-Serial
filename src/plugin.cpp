@@ -77,30 +77,6 @@
 
 namespace serial_monitor {
 PluginState g_state;
-
-void hostLog( int level, const QString& message )
-{
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->log_message( g_state.handle, level, message.toUtf8().constData() );
-    }
-}
-
-void hostNotify( const QString& message )
-{
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->show_notification( g_state.handle, message.toUtf8().constData() );
-    }
-}
-
-void logFailure( const char* what, const char* reason ) noexcept
-{
-    try {
-        hostLog( LOGSQUIRL_LOG_ERROR, QStringLiteral( "Serial Monitor plugin: %1 failed: %2" )
-                                          .arg( what, QString::fromUtf8( reason ) ) );
-    } catch ( ... ) {
-        // Nothing left to report it with.
-    }
-}
 } // namespace serial_monitor
 
 using serial_monitor::guarded;
@@ -157,7 +133,7 @@ static void showSerialDialog( void* /* userData */ )
 static void createSidebar()
 {
     auto& st = serial_monitor::g_state;
-    auto* sidebar = new serial_monitor::SidebarWidget( st.profiles, st.sessions );
+    auto* sidebar = new serial_monitor::SidebarWidget( st.host, st.profiles, st.sessions );
     st.sidebarWidget = sidebar;
     auto* dialog = st.dialog;
     QObject::connect( sidebar, &serial_monitor::SidebarWidget::newConfigurationRequested, dialog,
@@ -184,10 +160,10 @@ static void configureDefaults( QWidget* parent )
     if ( !store ) {
         return; // not initialised: nothing to configure
     }
+    auto& host = serial_monitor::g_state.host;
     // Without a configuration directory nothing can be saved.
     if ( const auto problem = store->defaultsUnsavable(); !problem.isEmpty() ) {
-        serial_monitor::hostLog( LOGSQUIRL_LOG_WARNING, problem );
-        serial_monitor::hostNotify( problem );
+        host.warn( problem );
         return;
     }
 
@@ -231,14 +207,12 @@ static void configureDefaults( QWidget* parent )
     chosen.timestamps = timestampCheckBox->isChecked();
     chosen.maxFileMiB = maxFileSpin->value();
     if ( const auto problem = store->saveDefaults( chosen ); !problem.isEmpty() ) {
-        serial_monitor::hostLog( LOGSQUIRL_LOG_ERROR, problem );
-        serial_monitor::hostNotify( problem );
+        host.warn( problem, LOGSQUIRL_LOG_ERROR );
         return;
     }
-    serial_monitor::hostLog( LOGSQUIRL_LOG_INFO,
-                             QString( "Default baud rate set to %1, timestamps %2" )
-                                 .arg( baudSpin->value() )
-                                 .arg( timestampCheckBox->isChecked() ? "on" : "off" ) );
+    host.log( LOGSQUIRL_LOG_INFO, QString( "Default baud rate set to %1, timestamps %2" )
+                                      .arg( baudSpin->value() )
+                                      .arg( timestampCheckBox->isChecked() ? "on" : "off" ) );
     // A new configuration proposes them from now on (ProfileStore::newProfile());
     // the saved ones keep their own settings.
 }
@@ -285,15 +259,18 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
 
     serial_monitor::g_state.api = api;
     serial_monitor::g_state.handle = handle;
+    serial_monitor::g_state.host
+        = serial_monitor::CApiHost( api, handle, serial_monitor::g_state.tempRoot );
     serial_monitor::g_state.initialised = true;
     serial_monitor::g_state.quitting = false;
 
     const bool ok = guarded( "initialisation", [ api, handle ] {
-        api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
+        auto& host = serial_monitor::g_state.host;
+        host.log( LOGSQUIRL_LOG_INFO, "Serial Monitor plugin initialising\u2026" );
 
         // Files of LogSquirl processes that ended without removing them,
         // e.g. after a crash: no tab can show them any more.
-        serial_monitor::removeStaleTempDirs( serial_monitor::tempRoot() );
+        serial_monitor::removeStaleTempDirs( host.tempRoot() );
 
         // Add "Serial Monitor…" to the Plugins menu.  When clicked it opens
         // the non-modal dialog that edits the saved port configurations.
@@ -303,10 +280,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // The captures, the saved configurations, and the dialog that edits
         // them (shown from the menu and the sidebar).  Creating the sessions
         // scans the ports, once, for every view.
-        auto* sessions = new serial_monitor::Sessions();
+        auto* sessions = new serial_monitor::Sessions( host );
         serial_monitor::g_state.sessions = sessions;
         serial_monitor::g_state.profiles = new serial_monitor::ProfileStore(
-            QString::fromUtf8( api->get_config_dir( handle ) ),
+            host.configDir(),
             [ sessions ]( const QString& name ) { return !sessions->portOf( name ).isEmpty(); } );
         serial_monitor::g_state.dialog
             = new serial_monitor::PortDialog( serial_monitor::g_state.profiles, sessions );
@@ -326,7 +303,7 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
                                    static_cast<void*>( serial_monitor::g_state.sidebarWidget ) );
         serial_monitor::g_state.sidebarTabRegistered = true;
 
-        api->log_message( handle, LOGSQUIRL_LOG_INFO, "Serial Monitor plugin ready." );
+        host.log( LOGSQUIRL_LOG_INFO, "Serial Monitor plugin ready." );
     } );
 
     if ( !ok ) {
@@ -359,7 +336,8 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     auto& st = serial_monitor::g_state;
     // Each step on its own, so that one failing does not skip the others.
     guarded( "shutdown", [] {
-        serial_monitor::hostLog( LOGSQUIRL_LOG_INFO, "Serial Monitor plugin shutting down\u2026" );
+        serial_monitor::g_state.host.log( LOGSQUIRL_LOG_INFO,
+                                          "Serial Monitor plugin shutting down\u2026" );
     } );
 
     // The host must let go of the tab before its widget is deleted.
@@ -401,12 +379,14 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     // disable or update, which only the directory names remember.  Save
     // paths and the log directory are never touched.
     if ( st.quitting ) {
-        guarded( "removing temporary files",
-                 [] { serial_monitor::removeOwnTempDirs( serial_monitor::tempRoot() ); } );
+        guarded( "removing temporary files", [] {
+            serial_monitor::removeOwnTempDirs( serial_monitor::g_state.host.tempRoot() );
+        } );
     }
 
     serial_monitor::g_state.api = nullptr;
     serial_monitor::g_state.handle = nullptr;
+    serial_monitor::g_state.host = serial_monitor::CApiHost();
     serial_monitor::g_state.hostApiSize = 0;
     serial_monitor::g_state.initialised = false;
 }

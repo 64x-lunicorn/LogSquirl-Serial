@@ -39,7 +39,6 @@
  */
 
 #include "serialprocess.h"
-#include "plugin.h"
 #include "tempdirs.h"
 
 #include <QDateTime>
@@ -103,11 +102,13 @@ qsizetype completeUtf8Length( const QByteArray& data )
 
 // ── Construction / destruction ──────────────────────────────────────────
 
-SerialProcess::SerialProcess( const SerialConfig& config, const QString& savePath, QObject* parent )
+SerialProcess::SerialProcess( Host& host, const SerialConfig& config, const QString& savePath,
+                              QObject* parent )
     : QObject( parent )
+    , host_( host )
     , config_( config )
     , savePath_( savePath )
-    , tempDir_( tempDirTemplate( tempRoot() ) )
+    , tempDir_( tempDirTemplate( host.tempRoot() ) )
 {
     connect( &port_, &QSerialPort::readyRead, this, &SerialProcess::onReadyRead );
     connect( &port_, &QSerialPort::errorOccurred, this, &SerialProcess::onPortError );
@@ -131,11 +132,7 @@ SerialProcess::~SerialProcess()
 
 QStringList SerialProcess::discoverPorts()
 {
-    const auto allPorts = QSerialPortInfo::availablePorts();
-    const auto ports = filterPorts( allPorts );
-
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Discovered %1 serial port(s)." ).arg( ports.size() ) );
-    return ports;
+    return filterPorts( QSerialPortInfo::availablePorts() );
 }
 
 QStringList SerialProcess::filterPorts( const QList<QSerialPortInfo>& ports )
@@ -328,8 +325,8 @@ bool SerialProcess::start()
     }
     startTime_ = QDateTime::currentDateTime();
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
+    host_.log( LOGSQUIRL_LOG_INFO,
+               QString( "Opened %1 at %2 baud" ).arg( config_.portName ).arg( config_.baudRate ) );
     Q_EMIT started();
     return true;
 }
@@ -356,8 +353,9 @@ void SerialProcess::stop()
 
     tempFile_.close();
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Closed %1 (%2 lines captured)" ).arg( config_.portName ).arg( lineCount_ ) );
+    host_.log(
+        LOGSQUIRL_LOG_INFO,
+        QString( "Closed %1 (%2 lines captured)" ).arg( config_.portName ).arg( lineCount_ ) );
     Q_EMIT finished();
 }
 
@@ -475,9 +473,9 @@ QString SerialProcess::rotateLog( PartialLine partialLine )
     fileBytes_ = 0;
     nextRotationAt_ = config_.maxFileBytes;
 
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
-                                     .arg( config_.portName )
-                                     .arg( rotationCount_ ) );
+    host_.log( LOGSQUIRL_LOG_INFO, QString( "Rotated serial log for %1 (rotation #%2)" )
+                                       .arg( config_.portName )
+                                       .arg( rotationCount_ ) );
 
     return newPath;
 }

@@ -61,7 +61,7 @@ SCENARIO( "a session is only accepted when its port opens", "[sessions]" )
     GIVEN( "a port that does not exist" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         const QString port = "logsquirl-test-no-such-port";
 
@@ -93,7 +93,7 @@ SCENARIO( "a session is only accepted when its port opens", "[sessions]" )
     GIVEN( "a save path that is not a full path" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         const QString port = "logsquirl-test-no-such-port";
 
         WHEN( "starting a session with it" )
@@ -116,7 +116,7 @@ SCENARIO( "a session is only accepted when its port opens", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir home;
         const auto oldHome = qgetenv( "HOME" );
         qputenv( "HOME", QFile::encodeName( home.path() ) );
@@ -144,7 +144,7 @@ SCENARIO( "a session is only accepted when its port opens", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
 
         WHEN( "starting a session" )
@@ -173,7 +173,7 @@ SCENARIO( "two sessions never write to the same file", "[sessions]" )
         FakeHost host;
         serial_test::PseudoTerminal firstDevice;
         serial_test::PseudoTerminal secondDevice;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
         REQUIRE( sessions.startSession( configFor( firstDevice.devicePath() ), savePath ) );
@@ -200,7 +200,7 @@ SCENARIO( "two sessions never write to the same file", "[sessions]" )
         FakeHost host;
         serial_test::PseudoTerminal firstDevice;
         serial_test::PseudoTerminal secondDevice;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         const auto savePath = logDir.filePath( "capture.log" );
         REQUIRE( sessions.startSession( configFor( firstDevice.devicePath() ), savePath ) );
@@ -246,7 +246,7 @@ SCENARIO( "a failed rotation is reported once", "[sessions]" )
 
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         REQUIRE( sessions.startSession( configFor( device.devicePath() ),
                                         logDir.filePath( "capture.log" ) ) );
@@ -280,7 +280,7 @@ SCENARIO( "a capture that reaches its size limit goes on in a new tab", "[sessio
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
         cfg.timestamps = false; // keep the file content predictable
@@ -323,7 +323,7 @@ SCENARIO( "stopAll keeps temporary log files for their tabs", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        auto* sessions = new Sessions;
+        auto* sessions = new Sessions( host );
         REQUIRE( sessions->startSession( configFor( device.devicePath() ) ) );
         REQUIRE( host.openedFiles.size() == 1 );
         const auto tempFile = host.openedFiles.first();
@@ -351,7 +351,7 @@ SCENARIO( "stopAll keeps temporary log files for their tabs", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        auto* sessions = new Sessions;
+        auto* sessions = new Sessions( host );
         REQUIRE( sessions->startSession( configFor( device.devicePath() ) ) );
         sessions->rotateSession( device.devicePath() );
         REQUIRE( host.openedFiles.size() == 2 );
@@ -384,7 +384,7 @@ SCENARIO( "an unplugged device ends its session", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
         REQUIRE( session );
@@ -427,7 +427,7 @@ SCENARIO( "any error of an open port ends its session, with one notification", "
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
         REQUIRE( session );
@@ -491,7 +491,7 @@ SCENARIO( "a log file that cannot be written ends its session", "[sessions]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         QTemporaryDir logDir;
         REQUIRE( sessions.startSession( configFor( device.devicePath() ),
                                         logDir.filePath( "capture.log" ) ) );
@@ -526,7 +526,7 @@ SCENARIO( "starting and stopping a session does not rescan the ports", "[session
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
         REQUIRE( scansBefore == 1 );
 
@@ -551,7 +551,7 @@ SCENARIO( "the port list is rescanned on request", "[sessions]" )
     GIVEN( "the sessions" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         int changes = 0;
         QObject::connect( &sessions, &Sessions::portsChanged, [ &changes ]() { ++changes; } );
         const auto scansBefore = host.logs.filter( "Discovered" ).size();
@@ -602,7 +602,7 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
     GIVEN( "the sessions and a port that does not exist" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         SessionEvents recorded( sessions );
 
         WHEN( "a session cannot start" )
@@ -622,7 +622,7 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
         FakeHost host;
         serial_test::PseudoTerminal first;
         serial_test::PseudoTerminal second;
-        Sessions sessions;
+        Sessions sessions( host );
         SessionEvents recorded( sessions );
         const auto firstPort = first.devicePath();
         const auto secondPort = second.devicePath();
@@ -702,7 +702,7 @@ SCENARIO( "the sessions announce what happens to them", "[sessions][signals]" )
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         auto cfg = configFor( device.devicePath() );
         cfg.maxFileBytes = 16;
         REQUIRE( sessions.startSession( cfg ) );
@@ -732,7 +732,7 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         auto cfg = configFor( device.devicePath() );
         cfg.timestamps = false;
         REQUIRE( sessions.startSession( cfg ) );
@@ -770,7 +770,7 @@ SCENARIO( "a running session's counters can be read through the sessions", "[ses
     GIVEN( "a port without a session" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
 
         THEN( "there is no session to read" )
         {
@@ -785,7 +785,7 @@ SCENARIO( "a session remembers the configuration that started it", "[sessions]" 
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
 
         THEN( "its port knows the configuration, and the configuration its port" )
@@ -834,7 +834,7 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ), {}, "board" ) );
         host.notifications.clear();
         host.openedFiles.clear();
@@ -862,7 +862,7 @@ SCENARIO( "a port that already captures is refused with a message", "[sessions]"
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         host.notifications.clear();
 
@@ -891,7 +891,7 @@ SCENARIO( "an exception in what a session reports does not escape", "[sessions][
     {
         FakeHost host;
         serial_test::PseudoTerminal device;
-        Sessions sessions;
+        Sessions sessions( host );
         REQUIRE( sessions.startSession( configFor( device.devicePath() ) ) );
         auto* session = sessions.findChild<serial_monitor::SerialProcess*>();
         REQUIRE( session );
@@ -941,3 +941,120 @@ SCENARIO( "an exception in what a session reports does not escape", "[sessions][
     }
 }
 #endif
+
+// Every refusal is a Host::warn(): one log entry, as a warning, and one
+// notification, with the same text.  An error a session reports is one log
+// entry, as an error, and one notification.
+SCENARIO( "the sessions tell the host they are handed, once each", "[sessions][host]" )
+{
+    GIVEN( "sessions on a fake host, after the port scan" )
+    {
+        FakeHost host;
+        Sessions sessions( host );
+
+        THEN( "the scan is logged, and nothing is notified" )
+        {
+            REQUIRE( host.logs.filter( "Discovered" ).size() == 1 );
+            REQUIRE( host.notifications.isEmpty() );
+        }
+
+        host.logs.clear();
+        host.logLevels.clear();
+
+        WHEN( "a session with an invalid baud rate is refused" )
+        {
+            auto config = configFor( "logsquirl-test-no-such-port" );
+            config.baudRate = 0;
+            REQUIRE_FALSE( sessions.startSession( config ) );
+
+            THEN( "the host logs one warning and shows one notification, saying the same" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "invalid baud rate" ) );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
+        }
+
+        WHEN( "a session whose port does not open is refused" )
+        {
+            REQUIRE_FALSE( sessions.startSession( configFor( "logsquirl-test-no-such-port" ) ) );
+
+            THEN( "the host logs one error and shows one notification, both naming the port" )
+            {
+                REQUIRE( host.logs.size() == 1 );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_ERROR } );
+                REQUIRE( host.logs.first().startsWith( "logsquirl-test-no-such-port: " ) );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith(
+                    "Serial error (logsquirl-test-no-such-port): " ) );
+                REQUIRE( host.openedFiles.isEmpty() );
+            }
+        }
+    }
+
+#ifdef Q_OS_UNIX
+    GIVEN( "a running session on a fake host" )
+    {
+        FakeHost host;
+        serial_test::PseudoTerminal device;
+        serial_test::PseudoTerminal otherDevice;
+        Sessions sessions( host );
+        QTemporaryDir logDir;
+        const auto savePath = logDir.filePath( "capture.log" );
+        REQUIRE( sessions.startSession( configFor( device.devicePath() ), savePath, "board" ) );
+
+        THEN( "its start opens one followed tab and is one notification" )
+        {
+            REQUIRE( host.followedFiles == QStringList{ savePath } );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().startsWith( "Serial capture started for" ) );
+        }
+
+        host.logs.clear();
+        host.logLevels.clear();
+        host.notifications.clear();
+
+        WHEN( "its port is started again" )
+        {
+            REQUIRE_FALSE( sessions.startSession( configFor( device.devicePath() ) ) );
+
+            THEN( "the host logs one warning and shows one notification naming the owner" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "“board”" ) );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
+        }
+
+        WHEN( "another port is started on its save path" )
+        {
+            REQUIRE_FALSE(
+                sessions.startSession( configFor( otherDevice.devicePath() ), savePath ) );
+
+            THEN( "the host logs one warning and shows one notification, saying the same" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "already writing to" ) );
+                REQUIRE( host.logs == host.notifications );
+                REQUIRE( host.logLevels == QList<int>{ LOGSQUIRL_LOG_WARNING } );
+            }
+        }
+
+        WHEN( "it is stopped" )
+        {
+            sessions.stopSession( device.devicePath() );
+
+            THEN( "the host shows one notification, and logs the port closed" )
+            {
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().startsWith( "Serial capture stopped for" ) );
+                REQUIRE( host.logs.filter( "Closed " + device.devicePath() ).size() == 1 );
+            }
+        }
+
+        sessions.stopAll();
+    }
+#endif
+}

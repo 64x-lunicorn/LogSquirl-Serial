@@ -57,6 +57,7 @@ target_link_libraries(logsquirl_serial_tests
 target_sources(logsquirl_serial_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
+        "${CMAKE_SOURCE_DIR}/src/host.cpp"
         "${CMAKE_SOURCE_DIR}/src/serialprocess.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/sessions.cpp"

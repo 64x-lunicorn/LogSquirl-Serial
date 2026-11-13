@@ -200,7 +200,7 @@ SCENARIO( "a custom default baud rate is proposed for a new configuration", "[ba
 
         WHEN( "the dialog sets up a new configuration" )
         {
-            Sessions sessions;
+            Sessions sessions( host );
             ProfileStore profiles( host.configDir() );
             PortDialog dialog( &profiles, &sessions );
             dialog.newConfiguration();
@@ -221,7 +221,7 @@ SCENARIO( "a session with an invalid baud rate is refused", "[baudrate]" )
     GIVEN( "a configuration without a usable baud rate" )
     {
         FakeHost host;
-        Sessions sessions;
+        Sessions sessions( host );
         SerialConfig cfg;
         cfg.portName = "logsquirl-test-port";
         cfg.baudRate = 0;

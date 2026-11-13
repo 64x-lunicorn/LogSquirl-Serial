@@ -21,16 +21,21 @@
  * @file fakehost.h
  * @brief In-process stand-in for the LogSquirl host API, for tests.
  *
- * A FakeHost installs itself into g_state for its lifetime: the plugin
- * gets a private, empty config directory (so tests never read or write
- * a real serial.ini) and a private temporary root, and every log message,
- * notification, open_file() request and menu entry is recorded for the
- * test to inspect.
+ * A FakeHost is a plain Host (host.h): hand it to the parts under test.  It
+ * has a private, empty config directory (so tests never read or write a
+ * real serial.ini) and a private temporary root, and records every log
+ * message, notification and tab opened for the test to inspect.
+ *
+ * It is the host's C table too (api(), with itself as the handle), for
+ * the tests of the plugin's entry points: what the plugin does through the
+ * table is recorded the same way, and so is every menu entry and sidebar
+ * tab.  It installs itself nowhere.
  */
 
 #pragma once
 
-#include "plugin.h"
+#include "host.h"
+#include "logsquirl_plugin_api.h"
 
 #include <catch2/catch.hpp>
 
@@ -46,7 +51,7 @@
 
 namespace serial_test {
 
-class FakeHost {
+class FakeHost : public serial_monitor::Host {
 public:
     /** A menu entry the plugin registered. */
     struct MenuAction {
@@ -65,27 +70,18 @@ public:
         : configDirUtf8_( configDir_.path().toUtf8() )
     {
         api_.api_version = LOGSQUIRL_PLUGIN_API_VERSION;
-        api_.log_message = []( void* handle, int, const char* message ) {
-            auto* host = self( handle );
-            const auto text = QString::fromUtf8( message );
-            host->logs << text;
-            if ( !host->failLogContaining.isEmpty() && text.contains( host->failLogContaining ) ) {
-                throw std::runtime_error( "the log is full" );
-            }
+        api_.log_message = []( void* handle, int level, const char* message ) {
+            self( handle )->log( level, QString::fromUtf8( message ) );
         };
         api_.get_config_dir = []( void* handle ) -> const char* {
             auto* host = self( handle );
             return host->hasConfigDir ? host->configDirUtf8_.constData() : nullptr;
         };
         api_.show_notification = []( void* handle, const char* message ) {
-            self( handle )->notifications << QString::fromUtf8( message );
+            self( handle )->notify( QString::fromUtf8( message ) );
         };
         api_.open_file = []( void* handle, const char* filePath, int follow ) {
-            auto* host = self( handle );
-            host->openedFiles << QString::fromUtf8( filePath );
-            if ( follow ) {
-                host->followedFiles << QString::fromUtf8( filePath );
-            }
+            self( handle )->open( QString::fromUtf8( filePath ), follow != 0 );
         };
         api_.register_menu_action = []( void* handle, const char*, const char* label,
                                         void ( *callback )( void* ), void* userData ) {
@@ -101,21 +97,45 @@ public:
         };
         api_.unregister_sidebar_tab
             = []( void* handle, void* widget ) { self( handle )->sidebarTabs.removeAll( widget ); };
-
-        serial_monitor::g_state.api = &api_;
-        serial_monitor::g_state.handle = this;
-        serial_monitor::g_state.tempRoot = tempRoot_.path();
-    }
-
-    ~FakeHost()
-    {
-        serial_monitor::g_state.api = nullptr;
-        serial_monitor::g_state.handle = nullptr;
-        serial_monitor::g_state.tempRoot.clear();
     }
 
     FakeHost( const FakeHost& ) = delete;
     FakeHost& operator=( const FakeHost& ) = delete;
+
+    // ── Host ─────────────────────────────────────────────────────────
+
+    void log( int level, const QString& message ) override
+    {
+        logs << message;
+        logLevels << level;
+        if ( !failLogContaining.isEmpty() && message.contains( failLogContaining ) ) {
+            throw std::runtime_error( "the log is full" );
+        }
+    }
+
+    void notify( const QString& message ) override
+    {
+        notifications << message;
+    }
+
+    void openFollowed( const QString& path ) override
+    {
+        open( path, true );
+    }
+
+    /** The plugin's config directory (empty until a test writes to it). */
+    QString configDir() const override
+    {
+        return hasConfigDir ? configDir_.path() : QString();
+    }
+
+    /** The plugin's temporary root, private to this host. */
+    QString tempRoot() const override
+    {
+        return tempRoot_.path();
+    }
+
+    // ── The C table ──────────────────────────────────────────────────
 
     /** The host API table, to pass to logsquirl_plugin_init(). */
     const LogSquirlHostApi* api() const
@@ -123,27 +143,24 @@ public:
         return &api_;
     }
 
-    /** The plugin's config directory (empty until a test writes to it). */
-    QString configDir() const
+    /** The handle to pass to logsquirl_plugin_init() with api(). */
+    void* handle()
     {
-        return configDir_.path();
+        return this;
     }
 
-    /** The plugin's temporary root, private to this host. */
-    QString tempRoot() const
-    {
-        return tempRoot_.path();
-    }
+    // ── What was recorded ────────────────────────────────────────────
 
     QStringList logs;
+    QList<int> logLevels; ///< The level of each of logs.
     QStringList notifications;
     QList<void*> sidebarTabs; ///< The widgets registered as sidebar tabs.
     /// register_sidebar_tab() throws, as a host out of room might.
     bool failSidebarTab = false;
-    /// get_config_dir() returns the config directory; NULL, as a host
-    /// without one does, when false.
+    /// configDir() and get_config_dir() give the config directory; empty
+    /// (NULL), as a host without one does, when false.
     bool hasConfigDir = true;
-    /// log_message() throws after logging a message containing this.
+    /// log() and log_message() throw after logging a message containing this.
     QString failLogContaining;
     QStringList openedFiles;
     QStringList followedFiles; ///< Those of openedFiles opened in follow mode.
@@ -153,6 +170,14 @@ private:
     static FakeHost* self( void* handle )
     {
         return static_cast<FakeHost*>( handle );
+    }
+
+    void open( const QString& path, bool follow )
+    {
+        openedFiles << path;
+        if ( follow ) {
+            followedFiles << path;
+        }
     }
 
     QTemporaryDir configDir_;
