@@ -82,8 +82,8 @@ QString errorNotification( const QString& portName, const QString& message )
 
 /**
  * A new log file for a capture of @p profile, in its log directory, or in
- * @p defaultLogDir when it has none; empty when both are, for a temporary
- * file.  The directory is created where the file is opened
+ * @p defaultLogDir when it has none; empty when both are (start() refuses
+ * it then).  The directory is created where the file is opened
  * (SerialProcess::start()), once the port is known to be free.
  */
 QString logPathFor( const PortProfile& profile, const QString& defaultLogDir )
@@ -146,9 +146,17 @@ QString Sessions::start( const PortProfile& profile, const Defaults& defaults,
         return refuse(
             QStringLiteral( "Serial capture %1 not started: %2" ).arg( profile.name, problem ) );
     }
+    // A capture of a configuration is always kept in a log directory.
+    const auto logPath = logPathFor( profile, defaultLogDir );
+    if ( logPath.isEmpty() ) {
+        return refuse( QStringLiteral( "Serial capture %1 not started: it has no log directory, "
+                                       "and LogSquirl gave the plugin no configuration directory "
+                                       "for the default one; choose a log directory." )
+                           .arg( profile.name ) );
+    }
     auto config = profile.serial;
     config.maxFileBytes = defaults.maxFileBytes();
-    return launch( config, logPathFor( profile, defaultLogDir ), profile.name );
+    return launch( config, logPath, profile.name );
 }
 
 bool Sessions::startSession( const SerialConfig& config, const QString& savePath,
@@ -169,6 +177,15 @@ QString Sessions::launch( const SerialConfig& config, const QString& savePath,
     const auto& name = config.portName;
     if ( name.isEmpty() ) {
         return refuse( QStringLiteral( "Serial capture not started: no port." ) );
+    }
+
+    // One capture a configuration, even when its port was edited while it
+    // runs: the calls by name would reach only one of two.
+    if ( const auto running = portOf( owner ); !running.isEmpty() ) {
+        return refuse(
+            QStringLiteral(
+                "Serial capture %1 not started: “%1” is already capturing %2; stop it first." )
+                .arg( owner, running ) );
     }
 
     // One session a port: the port would be opened twice.
@@ -253,7 +270,7 @@ void Sessions::stopSession( const QString& portName )
 
     host_.notify( QString( "Serial capture stopped for %1 (%2 lines)" )
                       .arg( portName )
-                      .arg( proc->lineCount() ) );
+                      .arg( proc->totalLineCount() ) );
 
     proc->deleteLater();
     Q_EMIT sessionStopped( portName );

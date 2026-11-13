@@ -124,9 +124,9 @@ until then each has a marked placeholder in [Usage](#usage):
      (`~` is your home directory).  Left empty, captures go to the `logs`
      folder in the plugin's configuration directory, which the empty field
      shows.  Either way they are kept: the plugin never removes a file in
-     the log directory.  Only when LogSquirl gives the plugin no
-     configuration directory are captures temporary files, removed when
-     LogSquirl quits — and then no configuration can be saved.
+     the log directory.  When LogSquirl gives the plugin no configuration
+     directory, there is no default log directory, and no configuration can
+     be saved.
    - **Save** — the configuration gets a tile in the Serial tab, or its
      tile is updated.  A configuration you edit (opened with Edit… or
      chosen from the list) saved under another name is renamed, and so is

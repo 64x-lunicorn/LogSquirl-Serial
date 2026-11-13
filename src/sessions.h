@@ -95,10 +95,13 @@ public:
      * @p defaults (ProfileStore::defaults()).  It writes to a new file,
      * YYYY-MM-dd_HHmmss_<port>.log, in the profile's log directory, or in
      * @p defaultLogDir (ProfileStore::defaultLogDir()) when it has none,
-     * created if it does not exist; to a temporary file when both are empty.
+     * created if it does not exist; it is refused when both are empty, as a
+     * capture of a configuration is never a temporary file.
      *
-     * Refused when startProblem() says why, when the port has a capture
-     * already (naming the configuration that holds it), when another capture
+     * Refused when startProblem() says why, when the configuration
+     * captures already (on whichever port: one configuration never has two
+     * captures), when the port has a capture already (naming the
+     * configuration that holds it), when another capture
      * writes to the file, or when the port or the file does not open.  The
      * host has been told each refusal once: a Host::warn(), or, for a port
      * or file that does not open, the error the capture reports (logged as
@@ -114,10 +117,9 @@ public:
     /**
      * Start capture for config.portName with @p config as it is, and open
      * its log file in a followed tab: start() without a saved configuration
-     * to check and derive it from.  Refused, as start() is, if the port has
-     * a session already, another session writes to @p savePath, or the port
-     * or the file does not open.  sessionStarted() follows a session that
-     * started.
+     * to check and derive it from.  Refused, as start() is, if @p owner
+     * captures already, if the port has a session already, another session writes to @p savePath,
+     * or the port or the file does not open.  sessionStarted() follows a session that started.
      *
      * @param savePath  Optional full path to a .log file for persistent
      *                  saving; empty for a temporary file.

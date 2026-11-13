@@ -165,9 +165,18 @@ Defaults ProfileStore::defaults() const
         return defaults;
     }
     const QSettings settings( settingsFile_, QSettings::IniFormat );
-    defaults.baudRate = settings.value( kDefaultBaudKey, defaults.baudRate ).toInt();
+    // A hand-edited value that is no baud rate or size is the built-in one,
+    // as a configuration's own baudRate is (list()).
+    bool ok = false;
+    const int baudRate = settings.value( kDefaultBaudKey ).toInt( &ok );
+    if ( ok && baudRate > 0 ) {
+        defaults.baudRate = baudRate;
+    }
     defaults.timestamps = settings.value( kTimestampsKey, defaults.timestamps ).toBool();
-    defaults.maxFileMiB = settings.value( kMaxFileMiBKey, defaults.maxFileMiB ).toInt();
+    const int maxFileMiB = settings.value( kMaxFileMiBKey ).toInt( &ok );
+    if ( ok && maxFileMiB >= 0 ) {
+        defaults.maxFileMiB = maxFileMiB;
+    }
     return defaults;
 }
 

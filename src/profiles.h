@@ -123,8 +123,9 @@ public:
 
     /// Where a configuration without a log directory writes its captures:
     /// `logs` in the configuration directory, where they are kept.  Empty
-    /// without a configuration directory: each capture then writes to a
-    /// temporary file, removed when LogSquirl quits.
+    /// without a configuration directory, where no configuration is saved
+    /// either; Sessions::start() refuses a configuration without a log
+    /// directory of its own then.
     QString defaultLogDir() const;
 
     /// The defaults saved in Configure; for each one not saved, that of

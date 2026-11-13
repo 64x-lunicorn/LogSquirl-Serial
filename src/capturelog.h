@@ -165,7 +165,9 @@ public:
      * If the new file cannot be created, the capture goes on in the old
      * one, reopened, and @p error says so; the size limit stays where it
      * was.  If the old file cannot be reopened either, @p error says so
-     * too, and the capture has ended: isOpen() is false.
+     * too, and the capture has ended: isOpen() is false, and a part of a
+     * line kept for the new file is dropped, so close() has nothing left
+     * to fail on.
      *
      * Not for a capture start()ed into a device, which it leaves as it is.
      *

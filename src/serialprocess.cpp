@@ -221,9 +221,9 @@ void SerialProcess::stop()
     // Write out any remaining partial line, and close the file
     logged( log_.close() );
 
-    host_.log(
-        LOGSQUIRL_LOG_INFO,
-        QString( "Closed %1 (%2 lines captured)" ).arg( config_.portName ).arg( lineCount() ) );
+    host_.log( LOGSQUIRL_LOG_INFO, QString( "Closed %1 (%2 lines captured)" )
+                                       .arg( config_.portName )
+                                       .arg( totalLineCount() ) );
     Q_EMIT finished();
 }
 
